@@ -1,0 +1,39 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// A connection to an external data source (REST API, PostgreSQL, or SQLite file).
+model DataSource {
+  id        String   @id @default(cuid())
+  name      String
+  type      String // REST | POSTGRES | SQLITE
+  config    String // JSON: REST -> {baseUrl, headers}; POSTGRES -> {connectionString}; SQLITE -> {file}
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  queries   Query[]
+}
+
+/// A saved query/request that runs against a DataSource.
+model Query {
+  id           String     @id @default(cuid())
+  name         String
+  dataSourceId String
+  dataSource   DataSource @relation(fields: [dataSourceId], references: [id], onDelete: Cascade)
+  config       String // JSON: REST -> {method, path, headers, body}; SQL -> {sql}
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+/// A saved app: a generated UI bound to a query, persisted so it can be re-opened and run with live data.
+model App {
+  id         String   @id @default(cuid())
+  name       String
+  definition String // JSON: {html, queryId?, prompt?, sample?}
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}

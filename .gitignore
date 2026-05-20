@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Env
+.env
+.env.local
+*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Prisma local db (generated)
+backend/prisma/dev.db
+backend/prisma/dev.db-journal
+*.db
+*.db-journal
+
+# Generated sample database (created by `npm run seed`)
+backend/data/
+
+# Misc
+.DS_Store
+.cache/
+coverage/
+*.tsbuildinfo

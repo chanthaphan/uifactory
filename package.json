@@ -1,0 +1,21 @@
+{
+  "name": "uifactory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "UIFactory - a low-code app builder: connect data sources, run queries, and generate app UIs from API output with Claude.",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "install:all": "npm install",
+    "setup": "npm run setup --workspace backend",
+    "dev": "concurrently -n backend,frontend -c blue,green \"npm:dev:backend\" \"npm:dev:frontend\"",
+    "dev:backend": "npm run start:dev --workspace backend",
+    "dev:frontend": "npm run dev --workspace frontend",
+    "build": "npm run build --workspace backend && npm run build --workspace frontend"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
