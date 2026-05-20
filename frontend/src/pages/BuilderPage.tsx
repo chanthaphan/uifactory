@@ -6,7 +6,7 @@ import {
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import SaveIcon from '@mui/icons-material/Save';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
-import { api, DataSource, ExecutionResult, GenerateUiResult, QueryDef, DataSourceType } from '../api/client';
+import { api, DataSource, ExecutionResult, GenerateUiResult, QueryDef, DataSourceType, PROVIDER_LABEL } from '../api/client';
 import ResultView from '../components/ResultView';
 import PreviewFrame from '../components/PreviewFrame';
 
@@ -294,8 +294,12 @@ export default function BuilderPage() {
                   {generated && (
                     <Chip
                       size="small"
-                      color={generated.source === 'claude' ? 'success' : 'default'}
-                      label={generated.source === 'claude' ? `Claude (${generated.model})` : 'Template (no API key)'}
+                      color={generated.source === 'ai' ? 'success' : 'default'}
+                      label={
+                        generated.source === 'ai'
+                          ? `${generated.provider ? PROVIDER_LABEL[generated.provider] : 'AI'} · ${generated.model}`
+                          : 'Template (no AI key)'
+                      }
                     />
                   )}
                 </Stack>

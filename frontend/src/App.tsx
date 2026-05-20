@@ -4,7 +4,7 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import AppsIcon from '@mui/icons-material/Apps';
 import { Link, Route, Routes, useLocation } from 'react-router-dom';
 import { useEffect, useState } from 'react';
-import { api } from './api/client';
+import { api, AiStatus, PROVIDER_LABEL } from './api/client';
 import DataSourcesPage from './pages/DataSourcesPage';
 import BuilderPage from './pages/BuilderPage';
 import AppsPage from './pages/AppsPage';
@@ -18,11 +18,17 @@ const NAV = [
 
 function NavBar() {
   const location = useLocation();
-  const [aiConfigured, setAiConfigured] = useState<boolean | null>(null);
+  const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
 
   useEffect(() => {
-    api.aiStatus().then((s) => setAiConfigured(s.configured)).catch(() => setAiConfigured(false));
+    api.aiStatus().then(setAiStatus).catch(() => setAiStatus({ configured: false, provider: null, model: null }));
   }, []);
+
+  const aiLabel = (() => {
+    if (!aiStatus) return 'AI…';
+    if (aiStatus.configured && aiStatus.provider) return `${PROVIDER_LABEL[aiStatus.provider]} connected`;
+    return 'AI: template mode';
+  })();
 
   return (
     <AppBar position="sticky" color="default" elevation={0} sx={{ borderBottom: '1px solid', borderColor: 'divider', bgcolor: '#fff' }}>
@@ -58,9 +64,9 @@ function NavBar() {
         </Stack>
         <Chip
           size="small"
-          color={aiConfigured ? 'success' : 'default'}
-          variant={aiConfigured ? 'filled' : 'outlined'}
-          label={aiConfigured == null ? 'AI…' : aiConfigured ? 'Claude connected' : 'AI: template mode'}
+          color={aiStatus?.configured ? 'success' : 'default'}
+          variant={aiStatus?.configured ? 'filled' : 'outlined'}
+          label={aiLabel}
         />
       </Toolbar>
     </AppBar>

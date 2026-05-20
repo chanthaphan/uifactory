@@ -15,9 +15,9 @@ Data source ──▶ Query ──▶ Run ──▶ JSON/rows ──▶ Claude �
   connections; secrets are redacted when read back.
 - **Query workspace** — write SQL or configure REST requests, run them, and inspect results as a
   table, an auto-chart (Recharts), or raw JSON.
-- **AI UI generation** — send the query output sample + a prompt to Claude; it returns a
-  self-contained HTML app that renders `window.APP_DATA`. Falls back to a built-in template
-  generator when no API key is configured, so the feature always works.
+- **AI UI generation** — send the query output sample + a prompt to an LLM (Claude, OpenAI, or
+  Azure OpenAI); it returns a self-contained HTML app that renders `window.APP_DATA`. Falls back to
+  a built-in template generator when no provider is configured, so the feature always works.
 - **Live preview** — generated apps render in a sandboxed iframe (scripts run, but with an opaque
   origin so generated code can't touch the host app).
 - **Save & run apps** — persist generated apps; re-open them to re-run the bound query and render
@@ -28,7 +28,7 @@ Data source ──▶ Query ──▶ Run ──▶ JSON/rows ──▶ Claude �
 | Layer    | Stack                                                        |
 | -------- | ------------------------------------------------------------ |
 | Frontend | React 19, TypeScript, Vite 7, MUI (Material UI), Recharts    |
-| Backend  | NestJS (Express), TypeScript, Prisma (SQLite), Anthropic SDK |
+| Backend  | NestJS (Express), TypeScript, Prisma (SQLite), Anthropic + OpenAI SDKs |
 | Runtime  | REST via axios · PostgreSQL via `pg` · SQLite via `node:sqlite` |
 
 ## Prerequisites
@@ -50,15 +50,27 @@ The seed creates a sample SQLite business database (`backend/data/sample.db`) wi
 
 ### Configure AI (optional but recommended)
 
-Copy `backend/.env.example` to `backend/.env` and set your key:
+"Generate UI" supports **Anthropic (Claude)**, **OpenAI**, and **Azure OpenAI**. Copy
+`backend/.env.example` to `backend/.env` and configure **one** provider:
+
+| Provider     | Required vars                                                                 | Default model      |
+| ------------ | ----------------------------------------------------------------------------- | ------------------ |
+| Anthropic    | `ANTHROPIC_API_KEY` (opt: `ANTHROPIC_MODEL`, `ANTHROPIC_BASE_URL`)            | `claude-sonnet-4-6`|
+| OpenAI       | `OPENAI_API_KEY` (opt: `OPENAI_MODEL`, `OPENAI_BASE_URL`)                     | `gpt-4o`           |
+| Azure OpenAI | `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT` (opt: `AZURE_OPENAI_API_VERSION`) | deployment name |
+
+The provider is auto-detected from the keys present (priority: Anthropic → Azure OpenAI → OpenAI).
+Force one explicitly with `AI_PROVIDER=anthropic|openai|azure-openai`.
 
 ```env
-ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_MODEL=claude-sonnet-4-6   # optional
+# Example: use OpenAI
+AI_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4o
 ```
 
-Without a key, "Generate UI" still works using the built-in template generator (the UI shows an
-"AI: template mode" badge).
+Without any provider, "Generate UI" still works using the built-in template generator (the nav
+shows an "AI: template mode" badge); otherwise it shows e.g. "OpenAI connected".
 
 ## Run
 

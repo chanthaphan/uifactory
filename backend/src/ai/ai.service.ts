@@ -1,16 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
-import Anthropic from '@anthropic-ai/sdk';
 import { GenerateUiDto } from './dto/generate.dto';
 import { buildFallbackHtml } from './fallback-generator';
+import { AiProviderName, defaultModel, detectProviderName, resolveProvider } from './ai.providers';
 
 export interface GenerateUiResult {
   html: string;
-  source: 'claude' | 'fallback';
+  source: 'ai' | 'fallback';
+  provider?: AiProviderName;
   model?: string;
   note?: string;
 }
-
-const DEFAULT_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 
 const SYSTEM_PROMPT = `You are UIFactory's UI generation engine. You turn a sample of API/database output into a single, self-contained HTML document that renders a polished business-application screen.
 
@@ -32,70 +31,55 @@ export class AiService {
   private readonly logger = new Logger(AiService.name);
 
   isConfigured(): boolean {
-    return Boolean(process.env.ANTHROPIC_API_KEY);
+    return resolveProvider() !== null;
   }
 
   status() {
+    const name = detectProviderName();
     return {
       configured: this.isConfigured(),
-      model: DEFAULT_MODEL,
-      provider: 'anthropic',
+      provider: name,
+      model: name ? defaultModel(name) : null,
     };
   }
 
   async generateUi(dto: GenerateUiDto): Promise<GenerateUiResult> {
     const truncatedSample = this.truncateSample(dto.sample);
+    const provider = resolveProvider();
 
-    if (!this.isConfigured()) {
+    if (!provider) {
       return {
         html: buildFallbackHtml(dto.prompt, truncatedSample, dto.queryName),
         source: 'fallback',
-        note: 'ANTHROPIC_API_KEY is not set, so a built-in template was used instead of Claude.',
+        note: 'No AI provider is configured, so a built-in template was used. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or the AZURE_OPENAI_* variables to use an LLM.',
       };
     }
 
+    const userContent = [
+      `User request: ${dto.prompt}`,
+      dto.queryName ? `Data label: ${dto.queryName}` : '',
+      '',
+      'Here is a sample of the data. window.APP_DATA will have this exact shape at runtime:',
+      '```json',
+      truncatedSample,
+      '```',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
     try {
-      const client = new Anthropic({
-        apiKey: process.env.ANTHROPIC_API_KEY,
-        baseURL: process.env.ANTHROPIC_BASE_URL || undefined,
-      });
-
-      const userContent = [
-        `User request: ${dto.prompt}`,
-        dto.queryName ? `Data label: ${dto.queryName}` : '',
-        '',
-        'Here is a sample of the data. window.APP_DATA will have this exact shape at runtime:',
-        '```json',
-        truncatedSample,
-        '```',
-      ]
-        .filter(Boolean)
-        .join('\n');
-
-      const message = await client.messages.create({
-        model: DEFAULT_MODEL,
-        max_tokens: 8000,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: userContent }],
-      });
-
-      const text = message.content
-        .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-        .map((b) => b.text)
-        .join('\n');
-
+      const text = await provider.generate(SYSTEM_PROMPT, userContent);
       const html = this.stripFences(text);
       if (!html.toLowerCase().includes('<')) {
         throw new Error('Model did not return HTML');
       }
-
-      return { html, source: 'claude', model: DEFAULT_MODEL };
+      return { html, source: 'ai', provider: provider.name, model: provider.model };
     } catch (err) {
-      this.logger.warn(`Claude generation failed, using fallback: ${(err as Error).message}`);
+      this.logger.warn(`${provider.name} generation failed, using fallback: ${(err as Error).message}`);
       return {
         html: buildFallbackHtml(dto.prompt, truncatedSample, dto.queryName),
         source: 'fallback',
-        note: `Claude request failed (${(err as Error).message}); used the built-in template instead.`,
+        note: `${provider.name} request failed (${(err as Error).message}); used the built-in template instead.`,
       };
     }
   }

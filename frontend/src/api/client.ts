@@ -46,17 +46,26 @@ export interface AppDef {
   updatedAt: string;
 }
 
+export type AiProviderName = 'anthropic' | 'openai' | 'azure-openai';
+
+export const PROVIDER_LABEL: Record<AiProviderName, string> = {
+  anthropic: 'Claude',
+  openai: 'OpenAI',
+  'azure-openai': 'Azure OpenAI',
+};
+
 export interface GenerateUiResult {
   html: string;
-  source: 'claude' | 'fallback';
+  source: 'ai' | 'fallback';
+  provider?: AiProviderName;
   model?: string;
   note?: string;
 }
 
 export interface AiStatus {
   configured: boolean;
-  model: string;
-  provider: string;
+  provider: AiProviderName | null;
+  model: string | null;
 }
 
 function errMessage(e: unknown): string {
