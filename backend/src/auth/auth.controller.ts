@@ -2,6 +2,7 @@ import { BadRequestException, Body, Controller, Get, Post, Query, Req, Res } fro
 import { randomBytes } from 'node:crypto';
 import { Request, Response } from 'express';
 import { AuthService } from './auth.service';
+import { SettingsService } from '../settings/settings.service';
 import { CurrentUser, Public } from './auth.decorators';
 import { AuthUser, OIDC_STATE_COOKIE } from './auth.types';
 
@@ -9,12 +10,21 @@ const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly settings: SettingsService,
+  ) {}
 
   @Public()
   @Get('config')
-  config() {
-    return { mode: this.auth.mode(), platformName: process.env.PLATFORM_NAME || 'UIFactory' };
+  async config() {
+    const s = await this.settings.get();
+    return {
+      mode: this.auth.mode(),
+      platformName: s.platformName,
+      platformLogo: s.platformLogo,
+      platformBrandColor: s.platformBrandColor,
+    };
   }
 
   @Public()
