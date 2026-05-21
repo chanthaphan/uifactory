@@ -1,0 +1,46 @@
+# Prod — production path: PostgreSQL (HA) + Key Vault + migrations, multi-replica.
+image:
+  tag: "" # set to the released image digest/sha by CI
+
+api:
+  replicas: 3
+  resources:
+    requests: { cpu: 250m, memory: 384Mi }
+    limits: { cpu: "1", memory: 768Mi }
+  hpa:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 65
+
+frontend:
+  replicas: 3
+
+embeddedSqlite:
+  enabled: false
+migrations:
+  enabled: true
+
+keyVault:
+  enabled: true
+  name: kv-uifactory-prod
+  tenantId: "<tenant-id>"
+
+workloadIdentity:
+  enabled: true
+  clientId: "<managed-identity-client-id>"
+
+config:
+  FRONTEND_URL: https://uifactory.example.com
+  AZURE_AD_TENANT_ID: "<tenant-id>"
+  AZURE_AD_CLIENT_ID: "<client-id>"
+  AZURE_AD_REDIRECT_URI: https://uifactory.example.com/api/auth/callback
+  AZURE_OPENAI_ENDPOINT: https://oai-uifactory-prod.openai.azure.com
+  ADMIN_EMAILS: "platform-admins@contoso.com"
+
+ingress:
+  host: uifactory.example.com
+  wafPolicyId: "<waf-policy-resource-id>"
+  tls:
+    enabled: true
+    secretName: uifactory-prod-tls

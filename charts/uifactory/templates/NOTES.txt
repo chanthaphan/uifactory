@@ -1,0 +1,14 @@
+UIFactory ({{ .Release.Name }}) deployed to namespace {{ .Release.Namespace }}.
+
+URL: https://{{ .Values.ingress.host }}
+
+API image:      {{ include "uifactory.apiImage" . }}
+Frontend image: {{ if .Values.frontend.enabled }}{{ include "uifactory.frontendImage" . }}{{ else }}(disabled — host SPA elsewhere){{ end }}
+
+Metadata DB:    {{ if .Values.embeddedSqlite.enabled }}embedded SQLite (DEMO — not durable){{ else }}external via DATABASE_URL{{ end }}
+Migrations job: {{ if .Values.migrations.enabled }}enabled{{ else }}disabled{{ end }}
+Key Vault CSI:  {{ if .Values.keyVault.enabled }}{{ .Values.keyVault.name }}{{ else }}disabled{{ end }}
+
+Check rollout:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "uifactory.name" . }}-api
+  kubectl -n {{ .Release.Namespace }} get ingress {{ include "uifactory.name" . }}

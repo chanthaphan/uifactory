@@ -1,0 +1,52 @@
+{{- if .Values.migrations.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "uifactory.name" . }}-migrate
+  labels:
+    {{- include "uifactory.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "uifactory.name" . }}
+        app.kubernetes.io/component: migrate
+        {{- if .Values.workloadIdentity.enabled }}
+        azure.workload.identity/use: "true"
+        {{- end }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: {{ include "uifactory.apiImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["npx", "prisma", "migrate", "deploy", "--schema", "backend/prisma/schema.prisma"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "uifactory.name" . }}-config
+            {{- if .Values.keyVault.enabled }}
+            - secretRef:
+                name: {{ .Values.keyVault.syncSecretName }}
+            {{- end }}
+          volumeMounts:
+            {{- if .Values.keyVault.enabled }}
+            - name: kv
+              mountPath: /mnt/secrets-store
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- if .Values.keyVault.enabled }}
+        - name: kv
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ include "uifactory.name" . }}-kv
+        {{- end }}
+{{- end }}

@@ -1,0 +1,96 @@
+# Default values for UIFactory. Override per environment with values-<env>.yaml.
+nameOverride: ""
+
+image:
+  registry: myacr.azurecr.io
+  apiRepository: uifactory-api
+  frontendRepository: uifactory-frontend
+  tag: latest
+  pullPolicy: IfNotPresent
+
+api:
+  replicas: 2
+  port: 3001
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+frontend:
+  enabled: true
+  replicas: 2
+  port: 80
+  resources:
+    requests: { cpu: 25m, memory: 32Mi }
+    limits: { cpu: 100m, memory: 128Mi }
+
+# AKS Entra Workload Identity: the API pod authenticates to Azure as this user-assigned identity.
+workloadIdentity:
+  enabled: true
+  clientId: ""        # client id of the user-assigned managed identity (federated to the SA)
+
+serviceAccount:
+  name: uifactory-api
+
+# Secrets Store CSI Driver (Azure Key Vault). When enabled, secrets are synced into a Kubernetes
+# Secret consumed by the pods via envFrom.
+keyVault:
+  enabled: false
+  name: ""            # Key Vault name
+  tenantId: ""
+  syncSecretName: uifactory-secrets
+  # Key Vault objectName -> container env var
+  secrets:
+    - kvName: DATABASE-URL
+      envKey: DATABASE_URL
+    - kvName: JWT-SECRET
+      envKey: JWT_SECRET
+    - kvName: SECRETS-KEY
+      envKey: SECRETS_KEY
+    - kvName: AZURE-AD-CLIENT-SECRET
+      envKey: AZURE_AD_CLIENT_SECRET
+
+# Non-secret environment (rendered into a ConfigMap).
+config:
+  NODE_ENV: production
+  PORT: "3001"
+  PLATFORM_NAME: UIFactory
+  FRONTEND_URL: https://uifactory.example.com
+  ADMIN_EMAILS: ""
+  AI_PROVIDER: azure-openai
+  AZURE_AD_TENANT_ID: ""
+  AZURE_AD_CLIENT_ID: ""
+  AZURE_AD_REDIRECT_URI: https://uifactory.example.com/api/auth/callback
+  AZURE_OPENAI_ENDPOINT: ""
+  AZURE_OPENAI_DEPLOYMENT: gpt-4o
+  AZURE_OPENAI_API_VERSION: "2024-10-21"
+  ALLOW_PRIVATE_NETWORK: "false"
+  OUTBOUND_ALLOWLIST: ""
+
+# Quick-start metadata DB: bundled SQLite on an emptyDir (DEMO ONLY — not durable, single replica).
+# For production set enabled:false, switch the Prisma provider to postgresql, provide DATABASE_URL
+# via Key Vault, and enable migrations (see chart README).
+embeddedSqlite:
+  enabled: true
+
+# Prisma migration Job (Helm pre-upgrade hook). Enable for the PostgreSQL production path.
+migrations:
+  enabled: false
+
+ingress:
+  enabled: true
+  className: azure/application-gateway
+  host: uifactory.example.com
+  wafPolicyId: ""     # Application Gateway WAF policy resource id (optional)
+  tls:
+    enabled: false
+    secretName: ""    # Kubernetes TLS secret (or use App Gateway listener cert from Key Vault)
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault

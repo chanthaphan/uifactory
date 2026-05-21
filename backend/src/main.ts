@@ -12,6 +12,9 @@ async function bootstrap() {
     cors: { origin: process.env.FRONTEND_URL || 'http://localhost:5173', credentials: true },
   });
   app.use(cookieParser());
+  // Behind an ingress/proxy (e.g. AKS App Gateway) terminating TLS, trust X-Forwarded-* so
+  // Secure session cookies are issued correctly.
+  app.getHttpAdapter().getInstance().set('trust proxy', 1);
   app.setGlobalPrefix('api');
   app.useGlobalPipes(
     new ValidationPipe({

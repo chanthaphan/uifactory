@@ -1,0 +1,39 @@
+# Test — production path: PostgreSQL + Key Vault + migrations.
+# Requires: Prisma provider switched to postgresql, a committed migration, and Key Vault populated.
+image:
+  tag: test
+
+api:
+  replicas: 2
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+
+embeddedSqlite:
+  enabled: false
+migrations:
+  enabled: true
+
+keyVault:
+  enabled: true
+  name: kv-uifactory-test
+  tenantId: "<tenant-id>"
+
+workloadIdentity:
+  enabled: true
+  clientId: "<managed-identity-client-id>"
+
+config:
+  FRONTEND_URL: https://uifactory-test.example.com
+  AZURE_AD_TENANT_ID: "<tenant-id>"
+  AZURE_AD_CLIENT_ID: "<client-id>"
+  AZURE_AD_REDIRECT_URI: https://uifactory-test.example.com/api/auth/callback
+  AZURE_OPENAI_ENDPOINT: https://oai-uifactory-test.openai.azure.com
+
+ingress:
+  host: uifactory-test.example.com
+  wafPolicyId: "<waf-policy-resource-id>"
+  tls:
+    enabled: true
+    secretName: uifactory-test-tls

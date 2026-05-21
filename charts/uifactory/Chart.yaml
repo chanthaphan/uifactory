@@ -1,0 +1,14 @@
+apiVersion: v2
+name: uifactory
+description: UIFactory — low-code internal-app platform (NestJS API + React SPA) for AKS
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - uifactory
+  - low-code
+  - nestjs
+  - react
+home: https://github.com/chanthaphan/uifactory
+maintainers:
+  - name: UIFactory
