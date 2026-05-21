@@ -1,4 +1,5 @@
-export type Role = 'admin' | 'member';
+/** admin = full control; member = builder (can create/edit apps); viewer = can only use shared apps. */
+export type Role = 'admin' | 'member' | 'viewer';
 
 /** The authenticated user attached to each request. */
 export interface AuthUser {

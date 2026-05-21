@@ -7,6 +7,8 @@ import { DataSourceType } from '../execution/execution.types';
 import { AuthUser } from '../auth/auth.types';
 import { decryptString, encryptString } from '../common/crypto.util';
 import { redactConfig } from '../common/redact.util';
+import { mergeConfigPreservingSecrets } from '../common/secret-merge.util';
+import { validateDataSourceConfig } from './config-validation';
 import { LIMITS } from '../common/limits';
 import { BadRequestException } from '@nestjs/common';
 
@@ -97,6 +99,8 @@ export class DataSourcesService {
   async create(appId: string, dto: CreateDataSourceDto, user: AuthUser) {
     await this.access.assertCanEdit(appId, user);
     await this.assertDataSourceCapacity(appId);
+    const invalid = validateDataSourceConfig(dto.type, dto.config);
+    if (invalid) throw new BadRequestException(invalid);
     const row = await this.prisma.dataSource.create({
       data: { name: dto.name, type: dto.type, config: encryptString(JSON.stringify(dto.config)), authMode: dto.authMode || 'shared', appId },
     });
@@ -128,7 +132,12 @@ export class DataSourcesService {
     const data: Record<string, unknown> = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.type !== undefined) data.type = dto.type;
-    if (dto.config !== undefined) data.config = encryptString(JSON.stringify(dto.config));
+    if (dto.config !== undefined) {
+      const merged = mergeConfigPreservingSecrets(this.parseConfig(row), dto.config);
+      const invalid = validateDataSourceConfig((dto.type ?? row.type) as DataSourceType, merged);
+      if (invalid) throw new BadRequestException(invalid);
+      data.config = encryptString(JSON.stringify(merged));
+    }
     if (dto.authMode !== undefined) data.authMode = dto.authMode;
     const updated = await this.prisma.dataSource.update({ where: { id }, data });
     return this.serialize(updated);
@@ -151,6 +160,8 @@ export class DataSourcesService {
 
   async testInline(appId: string, type: DataSourceType, config: Record<string, unknown>, user: AuthUser) {
     await this.access.assertCanEdit(appId, user);
+    const invalid = validateDataSourceConfig(type, config);
+    if (invalid) throw new BadRequestException(invalid);
     return this.execution.test(type, config);
   }
 }

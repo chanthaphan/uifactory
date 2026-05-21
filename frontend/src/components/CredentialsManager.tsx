@@ -48,13 +48,13 @@ export default function CredentialsManager({ appId, onChanged }: { appId: string
   };
 
   if (!items.length) {
-    return <Typography variant="caption" color="text.secondary">No data sources in this app require your personal credentials.</Typography>;
+    return <Typography variant="caption" color="text.secondary">No connectors in this app require your personal credentials.</Typography>;
   }
 
   return (
     <Stack spacing={1.5}>
       <Typography variant="caption" color="text.secondary">
-        These data sources connect with <strong>your own</strong> credentials. They are encrypted and only used for your sessions.
+        These connectors connect with <strong>your own</strong> credentials. They are encrypted and only used for your sessions.
       </Typography>
       {error && <Alert severity="error" onClose={() => setError('')}>{error}</Alert>}
       {msg && <Alert severity="success" onClose={() => setMsg('')}>{msg}</Alert>}

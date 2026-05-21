@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { normalizeDefinition, parseTemplate, remapQueryIds, TemplateBundle } from '../apps/app-defs';
+import { normalizeDefinition, parseTemplate, remapDataSourceIds, remapQueryIds, TemplateBundle } from '../apps/app-defs';
 import { decryptString } from '../common/crypto.util';
 import { AuthUser } from '../auth/auth.types';
 
@@ -60,7 +60,7 @@ export class TemplatesService {
     });
 
     const bundle: TemplateBundle = {
-      definition: remapQueryIds(normalizeDefinition(JSON.parse(app.definition)), qRef),
+      definition: remapDataSourceIds(remapQueryIds(normalizeDefinition(JSON.parse(app.definition)), qRef), dsRef),
       dataSources: bundleDs,
       queries: bundleQ,
     };

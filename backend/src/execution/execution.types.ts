@@ -1,4 +1,4 @@
-export type DataSourceType = 'REST' | 'POSTGRES' | 'SQLITE' | 'MSGRAPH';
+export type DataSourceType = 'REST' | 'POSTGRES' | 'SQLITE' | 'MSGRAPH' | 'AGENT';
 
 /** Server-trusted end-user identity forwarded to outbound calls (never client-supplied). */
 export interface RequestIdentity {

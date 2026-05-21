@@ -7,7 +7,7 @@ import { isIP } from 'node:net';
  * so user-supplied REST/agent/LLM endpoints can't reach internal services or cloud metadata.
  * Bypass with ALLOW_PRIVATE_NETWORK=true, or allowlist hosts via OUTBOUND_ALLOWLIST.
  */
-function isPrivateIp(ip: string): boolean {
+export function isPrivateIp(ip: string): boolean {
   const v = isIP(ip);
   if (v === 4) {
     const p = ip.split('.').map(Number);

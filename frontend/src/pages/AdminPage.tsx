@@ -8,7 +8,7 @@ import { api, AdminUser, AppSummary, Connector, DataSourceType, PlatformSettings
 import { useAuth } from '../auth/AuthContext';
 import BrandLogo from '../components/BrandLogo';
 
-const DS_TYPE_LABEL: Record<DataSourceType, string> = { REST: 'REST API', POSTGRES: 'PostgreSQL', SQLITE: 'SQLite', MSGRAPH: 'Microsoft 365' };
+const DS_TYPE_LABEL: Record<DataSourceType, string> = { REST: 'REST API', POSTGRES: 'PostgreSQL', SQLITE: 'SQLite', MSGRAPH: 'Microsoft 365', AGENT: 'Agent API' };
 
 function ConnectorsTab() {
   const [connectors, setConnectors] = useState<Connector[]>([]);
@@ -44,16 +44,21 @@ function ConnectorsTab() {
     await api.deleteConnector(id);
     await load();
   };
+  const configValid =
+    form.type === 'MSGRAPH' ||
+    (form.type === 'REST' && !!form.baseUrl.trim()) ||
+    (form.type === 'POSTGRES' && !!form.connectionString.trim()) ||
+    (form.type === 'SQLITE' && !!form.file.trim());
 
   return (
     <Box>
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Prebuilt connectors are reusable data-source configs any member can clone into their app (Data panel → “Add a prebuilt connector”). Secrets are encrypted and never shown.
+        Prebuilt connectors are reusable connector configs any member can clone into their app (Connectors panel → “Add from connector library”). Secrets are encrypted and never shown.
       </Typography>
       <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ p: 2, border: '1px dashed', borderColor: 'divider', borderRadius: 1, mb: 3 }}>
         <Stack spacing={1.2} sx={{ flex: 1 }}>
-          <TextField size="small" label="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          <TextField size="small" required label="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           <TextField size="small" label="Category (optional)" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} />
           <TextField size="small" label="Description (optional)" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
           <TextField select size="small" label="Type" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as DataSourceType })}>
@@ -65,13 +70,13 @@ function ConnectorsTab() {
         </Stack>
         <Stack spacing={1.2} sx={{ flex: 1 }}>
           {form.type === 'REST' && <>
-            <TextField size="small" label="Base URL" placeholder="https://api.example.com" value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} />
+            <TextField size="small" required label="Base URL" placeholder="https://api.example.com" value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} />
             <TextField size="small" label="Default headers (JSON, optional)" placeholder='{"Authorization":"Bearer …"}' value={form.headers} onChange={(e) => setForm({ ...form, headers: e.target.value })} multiline minRows={2} />
           </>}
-          {form.type === 'POSTGRES' && <TextField size="small" label="Connection string" value={form.connectionString} onChange={(e) => setForm({ ...form, connectionString: e.target.value })} />}
-          {form.type === 'SQLITE' && <TextField size="small" label="SQLite file path" value={form.file} onChange={(e) => setForm({ ...form, file: e.target.value })} />}
+          {form.type === 'POSTGRES' && <TextField size="small" required label="Connection string" value={form.connectionString} onChange={(e) => setForm({ ...form, connectionString: e.target.value })} />}
+          {form.type === 'SQLITE' && <TextField size="small" required label="SQLite file path" value={form.file} onChange={(e) => setForm({ ...form, file: e.target.value })} />}
           {form.type === 'MSGRAPH' && <Alert severity="info">Uses the platform's Azure AD app — no config needed.</Alert>}
-          <Box textAlign="right"><Button variant="contained" disabled={!form.name.trim()} onClick={create}>Create connector</Button></Box>
+          <Box textAlign="right"><Button variant="contained" disabled={!form.name.trim() || !configValid} onClick={create}>Create connector</Button></Box>
         </Stack>
       </Stack>
       <Paper variant="outlined">
@@ -103,7 +108,7 @@ function UsersTab() {
   const load = () => api.listUsers().then(setUsers).catch((e) => setError(api.errMessage(e)));
   useEffect(() => { load(); }, []);
 
-  const update = async (id: string, body: { role?: 'admin' | 'member'; active?: boolean }) => {
+  const update = async (id: string, body: { role?: 'admin' | 'member' | 'viewer'; active?: boolean }) => {
     try {
       await api.updateUser(id, body);
       await load();
@@ -128,9 +133,10 @@ function UsersTab() {
                 <TableCell>{u.name}</TableCell>
                 <TableCell>{u.email}</TableCell>
                 <TableCell>
-                  <TextField select size="small" value={u.role} onChange={(e) => update(u.id, { role: e.target.value as 'admin' | 'member' })} sx={{ width: 120 }}>
+                  <TextField select size="small" value={u.role} onChange={(e) => update(u.id, { role: e.target.value as 'admin' | 'member' | 'viewer' })} sx={{ width: 130 }}>
                     <MenuItem value="admin">admin</MenuItem>
-                    <MenuItem value="member">member</MenuItem>
+                    <MenuItem value="member">member (builder)</MenuItem>
+                    <MenuItem value="viewer">viewer</MenuItem>
                   </TextField>
                 </TableCell>
                 <TableCell><Switch checked={u.active} onChange={(e) => update(u.id, { active: e.target.checked })} /></TableCell>
