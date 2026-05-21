@@ -202,22 +202,28 @@ export const api = {
     http.post<TemplateSummary>(`/templates/from-app/${appId}`, meta).then((r) => r.data),
   deleteTemplate: (id: string) => http.delete(`/templates/${id}`).then((r) => r.data),
 
-  // data sources
-  listDataSources: () => http.get<DataSource[]>('/datasources').then((r) => r.data),
-  createDataSource: (body: { name: string; type: DataSourceType; config: Record<string, unknown> }) =>
-    http.post<DataSource>('/datasources', body).then((r) => r.data),
-  deleteDataSource: (id: string) => http.delete(`/datasources/${id}`).then((r) => r.data),
-  testDataSource: (id: string) => http.post<{ ok: boolean; message: string }>(`/datasources/${id}/test`).then((r) => r.data),
-  testInline: (body: { name?: string; type: DataSourceType; config: Record<string, unknown> }) =>
-    http.post<{ ok: boolean; message: string }>('/datasources/test', { name: body.name ?? 'test', ...body }).then((r) => r.data),
+  // data sources (per-app)
+  listDataSources: (appId: string) => http.get<DataSource[]>(`/apps/${appId}/datasources`).then((r) => r.data),
+  createDataSource: (appId: string, body: { name: string; type: DataSourceType; config: Record<string, unknown> }) =>
+    http.post<DataSource>(`/apps/${appId}/datasources`, body).then((r) => r.data),
+  updateDataSource: (appId: string, id: string, body: { name?: string; type?: DataSourceType; config?: Record<string, unknown> }) =>
+    http.put<DataSource>(`/apps/${appId}/datasources/${id}`, body).then((r) => r.data),
+  deleteDataSource: (appId: string, id: string) => http.delete(`/apps/${appId}/datasources/${id}`).then((r) => r.data),
+  testDataSource: (appId: string, id: string) =>
+    http.post<{ ok: boolean; message: string }>(`/apps/${appId}/datasources/${id}/test`).then((r) => r.data),
+  testInline: (appId: string, body: { name?: string; type: DataSourceType; config: Record<string, unknown> }) =>
+    http.post<{ ok: boolean; message: string }>(`/apps/${appId}/datasources/test`, { name: body.name ?? 'test', ...body }).then((r) => r.data),
 
-  // queries
-  listQueries: (dataSourceId?: string) =>
-    http.get<QueryDef[]>('/queries', { params: dataSourceId ? { dataSourceId } : {} }).then((r) => r.data),
-  createQuery: (body: { name: string; dataSourceId: string; config: Record<string, unknown> }) =>
-    http.post<QueryDef>('/queries', body).then((r) => r.data),
-  runInline: (body: { dataSourceId: string; config: Record<string, unknown> }) =>
-    http.post<ExecutionResult>('/queries/run', body).then((r) => r.data),
+  // queries (per-app)
+  listQueries: (appId: string) => http.get<QueryDef[]>(`/apps/${appId}/queries`).then((r) => r.data),
+  createQuery: (appId: string, body: { name: string; dataSourceId: string; config: Record<string, unknown> }) =>
+    http.post<QueryDef>(`/apps/${appId}/queries`, body).then((r) => r.data),
+  updateQuery: (appId: string, id: string, body: { name?: string; dataSourceId?: string; config?: Record<string, unknown> }) =>
+    http.put<QueryDef>(`/apps/${appId}/queries/${id}`, body).then((r) => r.data),
+  deleteQuery: (appId: string, id: string) => http.delete(`/apps/${appId}/queries/${id}`).then((r) => r.data),
+  runQuery: (appId: string, id: string) => http.post<ExecutionResult>(`/apps/${appId}/queries/${id}/run`).then((r) => r.data),
+  runInline: (appId: string, body: { dataSourceId: string; config: Record<string, unknown> }) =>
+    http.post<ExecutionResult>(`/apps/${appId}/queries/run`, body).then((r) => r.data),
 
   // ai
   aiStatus: () => http.get<AiStatus>('/ai/status').then((r) => r.data),

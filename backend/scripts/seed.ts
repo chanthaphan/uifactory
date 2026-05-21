@@ -5,7 +5,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { PrismaClient } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
 import { buildFallbackHtml } from '../src/ai/fallback-generator';
-import { slugify, AppDefinition, AppPage } from '../src/apps/app-defs';
+import { slugify, AppDefinition, AppPage, TemplateBundle, TemplateDataSource, TemplateQuery } from '../src/apps/app-defs';
+import { encryptString } from '../src/common/crypto.util';
 
 const prisma = new PrismaClient();
 
@@ -114,94 +115,29 @@ async function main() {
   await prisma.user.create({ data: { email: 'alice@uifactory.local', name: 'Alice Member', role: 'member' } });
   await prisma.user.create({ data: { email: 'bob@uifactory.local', name: 'Bob Member', role: 'member' } });
 
-  // Built-in SQLite data source (works out of the box).
-  const sqliteDs = await prisma.dataSource.create({
-    data: {
-      name: 'Sample Business DB (SQLite)',
-      type: 'SQLITE',
-      config: JSON.stringify({ file: sampleDbPath }),
-    },
-  });
-
-  // Public REST data source for demoing the "generate UI from API output" flow.
-  const restDs = await prisma.dataSource.create({
-    data: {
-      name: 'JSONPlaceholder (REST API)',
-      type: 'REST',
-      config: JSON.stringify({ baseUrl: 'https://jsonplaceholder.typicode.com' }),
-    },
-  });
-
-  const ordersQuery = await prisma.query.create({
-    data: {
-      name: 'Recent orders with customer + product',
-      dataSourceId: sqliteDs.id,
-      config: JSON.stringify({
-        sql: `SELECT o.id, c.name AS customer, p.name AS product, o.quantity, o.total, o.status, o.ordered_at
-FROM orders o
-JOIN customers c ON c.id = o.customer_id
-JOIN products p ON p.id = o.product_id
-ORDER BY o.ordered_at DESC
-LIMIT 25;`,
-      }),
-    },
-  });
-  const revenueQuery = await prisma.query.create({
-    data: {
-      name: 'Revenue by product category',
-      dataSourceId: sqliteDs.id,
-      config: JSON.stringify({
-        sql: `SELECT p.category, COUNT(*) AS orders, ROUND(SUM(o.total), 2) AS revenue
-FROM orders o JOIN products p ON p.id = o.product_id
-GROUP BY p.category
-ORDER BY revenue DESC;`,
-      }),
-    },
-  });
-  const customersQuery = await prisma.query.create({
-    data: {
-      name: 'All customers',
-      dataSourceId: sqliteDs.id,
-      config: JSON.stringify({ sql: 'SELECT id, name, email, country, created_at FROM customers ORDER BY created_at DESC;' }),
-    },
-  });
-  const productsQuery = await prisma.query.create({
-    data: {
-      name: 'Product catalog',
-      dataSourceId: sqliteDs.id,
-      config: JSON.stringify({ sql: 'SELECT id, name, category, price FROM products ORDER BY category, name;' }),
-    },
-  });
-  const ordersByStatusQuery = await prisma.query.create({
-    data: {
-      name: 'Orders by status',
-      dataSourceId: sqliteDs.id,
-      config: JSON.stringify({
-        sql: `SELECT o.id, c.name AS customer, p.name AS product, o.total, o.status, o.ordered_at
-FROM orders o JOIN customers c ON c.id = o.customer_id JOIN products p ON p.id = o.product_id
-WHERE o.status = {{status}}
-ORDER BY o.ordered_at DESC;`,
-      }),
-    },
-  });
-  const addCustomerQuery = await prisma.query.create({
-    data: {
-      name: 'Add customer',
-      dataSourceId: sqliteDs.id,
-      config: JSON.stringify({
-        sql: `INSERT INTO customers (name, email, country, created_at) VALUES ({{name}}, {{email}}, {{country}}, date('now'));`,
-      }),
-    },
-  });
-  const restUsersQuery = await prisma.query.create({
-    data: { name: 'GET /users', dataSourceId: restDs.id, config: JSON.stringify({ method: 'GET', path: '/users' }) },
-  });
-  await prisma.query.create({
-    data: { name: 'GET /posts', dataSourceId: restDs.id, config: JSON.stringify({ method: 'GET', path: '/posts' }) },
-  });
-
   console.log('Creating templates…');
   const pid = () => `page-${randomBytes(3).toString('hex')}`;
+
+  // Portable bundle building blocks: data sources + queries referenced by local refs.
+  const DS: Record<'sqlite' | 'rest', TemplateDataSource> = {
+    sqlite: { ref: 'sqlite', name: 'Sample Business DB (SQLite)', type: 'SQLITE', config: { file: sampleDbPath } },
+    rest: { ref: 'rest', name: 'JSONPlaceholder (REST API)', type: 'REST', config: { baseUrl: 'https://jsonplaceholder.typicode.com' } },
+  };
+  const Q: Record<string, TemplateQuery> = {
+    orders: { ref: 'q-orders', name: 'Recent orders with customer + product', dataSourceRef: 'sqlite', config: { sql: `SELECT o.id, c.name AS customer, p.name AS product, o.quantity, o.total, o.status, o.ordered_at\nFROM orders o JOIN customers c ON c.id = o.customer_id JOIN products p ON p.id = o.product_id\nORDER BY o.ordered_at DESC LIMIT 25;` } },
+    revenue: { ref: 'q-revenue', name: 'Revenue by product category', dataSourceRef: 'sqlite', config: { sql: `SELECT p.category, COUNT(*) AS orders, ROUND(SUM(o.total),2) AS revenue\nFROM orders o JOIN products p ON p.id = o.product_id GROUP BY p.category ORDER BY revenue DESC;` } },
+    customers: { ref: 'q-customers', name: 'All customers', dataSourceRef: 'sqlite', config: { sql: 'SELECT id, name, email, country, created_at FROM customers ORDER BY created_at DESC;' } },
+    products: { ref: 'q-products', name: 'Product catalog', dataSourceRef: 'sqlite', config: { sql: 'SELECT id, name, category, price FROM products ORDER BY category, name;' } },
+    ordersByStatus: { ref: 'q-orders-status', name: 'Orders by status', dataSourceRef: 'sqlite', config: { sql: `SELECT o.id, c.name AS customer, p.name AS product, o.total, o.status, o.ordered_at\nFROM orders o JOIN customers c ON c.id = o.customer_id JOIN products p ON p.id = o.product_id\nWHERE o.status = {{status}} ORDER BY o.ordered_at DESC;` } },
+    addCustomer: { ref: 'q-add-customer', name: 'Add customer', dataSourceRef: 'sqlite', config: { sql: `INSERT INTO customers (name, email, country, created_at) VALUES ({{name}}, {{email}}, {{country}}, date('now'));` } },
+    restUsers: { ref: 'q-rest-users', name: 'GET /users', dataSourceRef: 'rest', config: { method: 'GET', path: '/users' } },
+  };
+  const dsByRef: Record<string, TemplateDataSource> = { sqlite: DS.sqlite, rest: DS.rest };
+  const bundle = (pages: AppPage[], queries: TemplateQuery[] = []): TemplateBundle => {
+    const refs = [...new Set(queries.map((q) => q.dataSourceRef))];
+    return { definition: { pages }, dataSources: refs.map((r) => dsByRef[r]), queries };
+  };
+
   const samples = {
     orders: JSON.stringify([
       { id: 40, customer: 'Wayne Enterprises', product: 'Coffee Subscription', quantity: 4, total: 236, status: 'refunded' },
@@ -224,8 +160,6 @@ ORDER BY o.ordered_at DESC;`,
       { id: 2, name: 'Ervin Howell', username: 'Antonette', email: 'Shanna@melissa.tv' },
     ]),
   };
-  const ordersSample = samples.orders;
-  const ordersHtml = buildFallbackHtml('Orders dashboard with a sortable, filterable table', ordersSample, 'Orders');
 
   const uiPage = (
     name: string,
@@ -253,86 +187,83 @@ ORDER BY o.ordered_at DESC;`,
     chat: { systemPrompt, greeting, ...(queryId ? { queryId } : {}) },
   });
 
-  const templates: { name: string; description: string; category: string; definition: AppDefinition }[] = [
+  const templates: { name: string; description: string; category: string; bundle: TemplateBundle }[] = [
     { name: 'Orders Dashboard', description: 'Sortable, filterable table of recent orders.', category: 'Dashboard',
-      definition: { pages: [uiPage('Orders', 'orders', ordersQuery.id, 'Orders dashboard with a sortable, filterable table and a row/total summary', samples.orders)] } },
+      bundle: bundle([uiPage('Orders', 'orders', Q.orders.ref, 'Orders dashboard with a sortable, filterable table and a row/total summary', samples.orders)], [Q.orders]) },
     { name: 'Revenue Analytics', description: 'Revenue by category with summary cards and a chart.', category: 'Dashboard',
-      definition: { pages: [uiPage('Revenue', 'revenue', revenueQuery.id, 'Revenue analytics: summary cards for totals plus a bar chart of revenue by category and a breakdown table', samples.revenue)] } },
+      bundle: bundle([uiPage('Revenue', 'revenue', Q.revenue.ref, 'Revenue analytics: summary cards for totals plus a bar chart of revenue by category and a breakdown table', samples.revenue)], [Q.revenue]) },
     { name: 'Customer Directory', description: 'Searchable directory of customers.', category: 'Dashboard',
-      definition: { pages: [uiPage('Customers', 'customers', customersQuery.id, 'Customer directory: a searchable, sortable table with a country filter', samples.customers)] } },
+      bundle: bundle([uiPage('Customers', 'customers', Q.customers.ref, 'Customer directory: a searchable, sortable table with a country filter', samples.customers)], [Q.customers]) },
     { name: 'Product Catalog', description: 'Products grouped by category.', category: 'Dashboard',
-      definition: { pages: [uiPage('Products', 'products', productsQuery.id, 'Product catalog: cards grouped by category showing name and price, with a search box', samples.products)] } },
+      bundle: bundle([uiPage('Products', 'products', Q.products.ref, 'Product catalog: cards grouped by category showing name and price, with a search box', samples.products)], [Q.products]) },
     { name: 'REST API Explorer', description: 'Render data returned by a REST API.', category: 'Integration',
-      definition: { pages: [uiPage('Users', 'users', restUsersQuery.id, 'A table of users returned by the REST API with a text filter', samples.users)] } },
+      bundle: bundle([uiPage('Users', 'users', Q.restUsers.ref, 'A table of users returned by the REST API with a text filter', samples.users)], [Q.restUsers]) },
     { name: 'Executive KPI Summary', description: 'High-level KPI cards from revenue data.', category: 'Dashboard',
-      definition: { pages: [uiPage('Summary', 'summary', revenueQuery.id, 'Executive summary: large KPI cards for total revenue, total orders, and the top category', samples.revenue)] } },
+      bundle: bundle([uiPage('Summary', 'summary', Q.revenue.ref, 'Executive summary: large KPI cards for total revenue, total orders, and the top category', samples.revenue)], [Q.revenue]) },
     { name: 'Support Assistant', description: 'A conversational chat assistant.', category: 'Chat',
-      definition: { pages: [chatPage('Assistant', 'assistant', 'You are a friendly support assistant for our internal tools.', 'Hi! How can I help you today?')] } },
+      bundle: bundle([chatPage('Assistant', 'assistant', 'You are a friendly support assistant for our internal tools.', 'Hi! How can I help you today?')]) },
     { name: 'Data Analyst (grounded)', description: 'Chat grounded on revenue data.', category: 'Chat',
-      definition: { pages: [chatPage('Analyst', 'analyst', 'You are a data analyst. Answer using the provided revenue dataset and cite the numbers.', 'Ask me about revenue by category.', revenueQuery.id)] } },
+      bundle: bundle([chatPage('Analyst', 'analyst', 'You are a data analyst. Answer using the provided revenue dataset and cite the numbers.', 'Ask me about revenue by category.', Q.revenue.ref)], [Q.revenue]) },
     { name: 'SQL Query Helper', description: 'Assistant that helps write and explain SQL.', category: 'Chat',
-      definition: { pages: [chatPage('SQL Helper', 'sql-helper', 'You are an expert SQL assistant. Help the user write and explain SQL queries.', 'Describe the query you need and I will help you write the SQL.')] } },
+      bundle: bundle([chatPage('SQL Helper', 'sql-helper', 'You are an expert SQL assistant. Help the user write and explain SQL queries.', 'Describe the query you need and I will help you write the SQL.')]) },
     { name: 'Operations Console', description: 'Multi-page: orders dashboard + AI assistant.', category: 'Multi-page',
-      definition: { pages: [uiPage('Orders', 'orders', ordersQuery.id, 'Orders dashboard table', samples.orders), chatPage('Assistant', 'assistant', 'You are an operations analyst for the orders app.', 'How can I help with operations?', revenueQuery.id)] } },
+      bundle: bundle([uiPage('Orders', 'orders', Q.orders.ref, 'Orders dashboard table', samples.orders), chatPage('Assistant', 'assistant', 'You are an operations analyst for the orders app.', 'How can I help with operations?', Q.revenue.ref)], [Q.orders, Q.revenue]) },
     { name: 'Customer 360', description: 'Multi-page: customer directory + grounded chat.', category: 'Multi-page',
-      definition: { pages: [uiPage('Customers', 'customers', customersQuery.id, 'Customer directory table', samples.customers), chatPage('Assistant', 'assistant', 'You are a CRM assistant. Use the customer dataset to answer questions.', 'Ask me about our customers.', customersQuery.id)] } },
+      bundle: bundle([uiPage('Customers', 'customers', Q.customers.ref, 'Customer directory table', samples.customers), chatPage('Assistant', 'assistant', 'You are a CRM assistant. Use the customer dataset to answer questions.', 'Ask me about our customers.', Q.customers.ref)], [Q.customers]) },
     { name: 'Customer Admin (CRUD)', description: 'Customer table plus an add-customer form (write-back).', category: 'Forms',
-      definition: { pages: [uiPage('Customers', 'customers', customersQuery.id,
-        'A customer admin screen: a table of customers, plus an "Add customer" form with name, email and country fields. On submit call UIFactory.runAction("createCustomer", {name, email, country}) then UIFactory.refresh().',
-        samples.customers, [{ name: 'createCustomer', queryId: addCustomerQuery.id }, { name: 'listCustomers', queryId: customersQuery.id }])] } },
+      bundle: bundle([uiPage('Customers', 'customers', Q.customers.ref,
+        'A customer admin screen: a table of customers, plus an "Add customer" form. On submit call UIFactory.runAction("createCustomer", {name, email, country}) then UIFactory.refresh().',
+        samples.customers, [{ name: 'createCustomer', queryId: Q.addCustomer.ref }, { name: 'listCustomers', queryId: Q.customers.ref }])], [Q.customers, Q.addCustomer]) },
     { name: 'Orders by Status (filter)', description: 'Interactive orders list with a status filter.', category: 'Interactive',
-      definition: { pages: [uiPage('Orders', 'orders', ordersQuery.id,
-        'Orders list with a status dropdown (paid, pending, shipped, refunded). When it changes, call UIFactory.runAction("byStatus", {status}) and re-render the table with the returned rows.',
-        samples.orders, [{ name: 'byStatus', queryId: ordersByStatusQuery.id }])] } },
+      bundle: bundle([uiPage('Orders', 'orders', Q.orders.ref,
+        'Orders list with a status dropdown (paid, pending, shipped, refunded). When it changes, call UIFactory.runAction("byStatus", {status}) and re-render the table.',
+        samples.orders, [{ name: 'byStatus', queryId: Q.ordersByStatus.ref }])], [Q.orders, Q.ordersByStatus]) },
     { name: 'Blank Dashboard', description: 'Start from an empty UI page.', category: 'Starter',
-      definition: { pages: [{ id: pid(), name: 'Home', slug: 'home', type: 'ui' }] } },
+      bundle: bundle([{ id: pid(), name: 'Home', slug: 'home', type: 'ui' }]) },
     { name: 'Blank Chat', description: 'Start from an empty chat page.', category: 'Starter',
-      definition: { pages: [{ id: pid(), name: 'Chat', slug: 'chat', type: 'chat', chat: { greeting: 'Hi! How can I help?' } }] } },
+      bundle: bundle([{ id: pid(), name: 'Chat', slug: 'chat', type: 'chat', chat: { greeting: 'Hi! How can I help?' } }]) },
   ];
 
   for (const t of templates) {
     await prisma.template.create({
-      data: { name: t.name, description: t.description, category: t.category, definition: JSON.stringify(t.definition), createdById: admin.id },
+      data: { name: t.name, description: t.description, category: t.category, definition: JSON.stringify(t.bundle), createdById: admin.id },
     });
   }
   console.log(`  -> ${templates.length} templates created`);
 
   console.log('Creating a sample deployed app…');
-  const sampleAppDef: AppDefinition = {
-    pages: [
-      { id: pid(), name: 'Orders', slug: 'orders', type: 'ui', queryId: ordersQuery.id, prompt: 'Orders dashboard table', html: ordersHtml, sample: ordersSample },
-      {
-        id: pid(),
-        name: 'Assistant',
-        slug: 'assistant',
-        type: 'chat',
-        chat: { systemPrompt: 'You are a business analyst for the Orders app. Answer using the revenue data.', queryId: revenueQuery.id, greeting: 'Ask me about revenue by category.' },
-      },
-    ],
-  };
-  const sampleDefJson = JSON.stringify(sampleAppDef);
-  await prisma.app.create({
+  const sApp = await prisma.app.create({
     data: {
       name: 'Orders Operations',
       description: 'Sample multi-page app: an orders dashboard plus an AI assistant.',
       slug: slugify('Orders Operations'),
-      definition: sampleDefJson,
-      publishedDefinition: sampleDefJson,
-      version: 1,
-      visibility: 'org',
-      status: 'deployed',
-      deployedAt: new Date(),
+      definition: JSON.stringify({ pages: [] }),
       ownerId: admin.id,
       memberships: { create: [{ userEmail: admin.email, role: 'owner' }] },
     },
+  });
+  const sDs = await prisma.dataSource.create({
+    data: { name: DS.sqlite.name, type: 'SQLITE', config: encryptString(JSON.stringify(DS.sqlite.config)), appId: sApp.id },
+  });
+  const sOrders = await prisma.query.create({ data: { name: Q.orders.name, dataSourceId: sDs.id, appId: sApp.id, config: JSON.stringify(Q.orders.config) } });
+  const sRevenue = await prisma.query.create({ data: { name: Q.revenue.name, dataSourceId: sDs.id, appId: sApp.id, config: JSON.stringify(Q.revenue.config) } });
+  const sampleDef: AppDefinition = {
+    pages: [
+      uiPage('Orders', 'orders', sOrders.id, 'Orders dashboard table', samples.orders),
+      chatPage('Assistant', 'assistant', 'You are a business analyst for the Orders app. Answer using the revenue data.', 'Ask me about revenue by category.', sRevenue.id),
+    ],
+  };
+  const sampleJson = JSON.stringify(sampleDef);
+  await prisma.app.update({
+    where: { id: sApp.id },
+    data: { definition: sampleJson, publishedDefinition: sampleJson, version: 1, visibility: 'org', status: 'deployed', deployedAt: new Date() },
   });
 
   await prisma.setting.create({ data: { key: 'platformName', value: JSON.stringify('UIFactory') } });
 
   console.log('Seed complete:');
   console.log('  - 3 users (1 admin, 2 members)');
-  console.log('  - 2 data sources (SQLite + REST), 8 queries');
-  console.log(`  - ${templates.length} templates, 1 deployed sample app`);
+  console.log(`  - ${templates.length} templates (self-contained bundles), 1 deployed sample app`);
 }
 
 main()

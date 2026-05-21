@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
+import { AppAccessModule } from './apps/app-access.module';
 import { UsersModule } from './users/users.module';
 import { OrgModule } from './org/org.module';
 import { TemplatesModule } from './templates/templates.module';
@@ -16,6 +17,7 @@ import { HealthController } from './health.controller';
   imports: [
     PrismaModule,
     AuthModule,
+    AppAccessModule,
     UsersModule,
     OrgModule,
     TemplatesModule,

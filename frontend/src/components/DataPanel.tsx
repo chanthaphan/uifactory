@@ -1,0 +1,165 @@
+import { useEffect, useState } from 'react';
+import {
+  Alert, Box, Button, Chip, Divider, Drawer, IconButton, MenuItem, Stack, TextField, Typography,
+} from '@mui/material';
+import AddIcon from '@mui/icons-material/Add';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import BoltIcon from '@mui/icons-material/Bolt';
+import { api, DataSource, DataSourceType, QueryDef } from '../api/client';
+import ResultView from './ResultView';
+
+const TYPE_LABEL: Record<DataSourceType, string> = { REST: 'REST API', POSTGRES: 'PostgreSQL', SQLITE: 'SQLite', MSGRAPH: 'Microsoft 365' };
+
+function dsConfigFromForm(type: DataSourceType, f: { baseUrl: string; connectionString: string; file: string; headers: string }): Record<string, unknown> {
+  if (type === 'REST') {
+    const cfg: Record<string, unknown> = { baseUrl: f.baseUrl.trim() };
+    if (f.headers.trim()) cfg.headers = JSON.parse(f.headers);
+    return cfg;
+  }
+  if (type === 'POSTGRES') return { connectionString: f.connectionString.trim() };
+  if (type === 'MSGRAPH') return {};
+  return { file: f.file.trim() };
+}
+
+export default function DataPanel({ appId, open, onClose, onChanged }: { appId: string; open: boolean; onClose: () => void; onChanged: () => void }) {
+  const [dataSources, setDataSources] = useState<DataSource[]>([]);
+  const [queries, setQueries] = useState<QueryDef[]>([]);
+  const [error, setError] = useState('');
+  const [msg, setMsg] = useState('');
+
+  // data source form
+  const [dsName, setDsName] = useState('');
+  const [dsType, setDsType] = useState<DataSourceType>('SQLITE');
+  const [dsForm, setDsForm] = useState({ baseUrl: '', connectionString: '', file: '', headers: '' });
+
+  // query form
+  const [qName, setQName] = useState('');
+  const [qDs, setQDs] = useState('');
+  const [qSql, setQSql] = useState('SELECT 1;');
+  const [qMethod, setQMethod] = useState('GET');
+  const [qPath, setQPath] = useState('');
+  const [qResult, setQResult] = useState<unknown>(null);
+
+  const load = () => {
+    api.listDataSources(appId).then(setDataSources).catch((e) => setError(api.errMessage(e)));
+    api.listQueries(appId).then(setQueries).catch(() => undefined);
+  };
+  useEffect(() => {
+    if (open) load();
+  }, [open, appId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const notify = (m: string) => { setMsg(m); setTimeout(() => setMsg(''), 2500); };
+
+  const addDataSource = async () => {
+    setError('');
+    try {
+      await api.createDataSource(appId, { name: dsName.trim(), type: dsType, config: dsConfigFromForm(dsType, dsForm) });
+      setDsName(''); setDsForm({ baseUrl: '', connectionString: '', file: '', headers: '' });
+      load(); onChanged(); notify('Data source added');
+    } catch (e) { setError(api.errMessage(e)); }
+  };
+  const testNew = async () => {
+    setError('');
+    try {
+      const r = await api.testInline(appId, { type: dsType, config: dsConfigFromForm(dsType, dsForm) });
+      notify(r.message);
+    } catch (e) { setError(api.errMessage(e)); }
+  };
+  const removeDs = async (id: string) => { await api.deleteDataSource(appId, id); load(); onChanged(); };
+
+  const selectedDsType = dataSources.find((d) => d.id === qDs)?.type;
+  const addQuery = async () => {
+    setError('');
+    const config = selectedDsType === 'SQLITE' || selectedDsType === 'POSTGRES' ? { sql: qSql } : { method: qMethod, path: qPath };
+    try {
+      await api.createQuery(appId, { name: qName.trim(), dataSourceId: qDs, config });
+      setQName(''); setQResult(null);
+      load(); onChanged(); notify('Query saved');
+    } catch (e) { setError(api.errMessage(e)); }
+  };
+  const runQ = async (id: string) => {
+    setError('');
+    try {
+      const r = await api.runQuery(appId, id);
+      setQResult(r.data);
+    } catch (e) { setError(api.errMessage(e)); }
+  };
+  const removeQ = async (id: string) => { await api.deleteQuery(appId, id); load(); onChanged(); };
+
+  return (
+    <Drawer anchor="right" open={open} onClose={onClose}>
+      <Box sx={{ width: 460, p: 3 }}>
+        <Typography variant="h6" gutterBottom>Data &amp; Queries</Typography>
+        {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
+        {msg && <Alert severity="success" sx={{ mb: 2 }}>{msg}</Alert>}
+
+        <Typography variant="subtitle2" gutterBottom>Data sources</Typography>
+        <Stack spacing={1} mb={1}>
+          {dataSources.map((d) => (
+            <Stack key={d.id} direction="row" alignItems="center" spacing={1}>
+              <Chip size="small" label={TYPE_LABEL[d.type]} />
+              <Typography variant="body2" sx={{ flexGrow: 1 }}>{d.name}</Typography>
+              <IconButton size="small" title="Test" onClick={async () => { try { const r = await api.testDataSource(appId, d.id); notify(r.message); } catch (e) { setError(api.errMessage(e)); } }}><BoltIcon fontSize="small" /></IconButton>
+              <IconButton size="small" onClick={() => removeDs(d.id)}><DeleteOutlineIcon fontSize="small" /></IconButton>
+            </Stack>
+          ))}
+          {dataSources.length === 0 && <Typography variant="caption" color="text.secondary">No data sources yet.</Typography>}
+        </Stack>
+        <Stack spacing={1.2} sx={{ p: 1.5, border: '1px dashed', borderColor: 'divider', borderRadius: 1, mb: 3 }}>
+          <TextField size="small" label="Name" value={dsName} onChange={(e) => setDsName(e.target.value)} />
+          <TextField select size="small" label="Type" value={dsType} onChange={(e) => setDsType(e.target.value as DataSourceType)}>
+            <MenuItem value="SQLITE">SQLite</MenuItem>
+            <MenuItem value="POSTGRES">PostgreSQL</MenuItem>
+            <MenuItem value="REST">REST API</MenuItem>
+            <MenuItem value="MSGRAPH">Microsoft 365 (Graph)</MenuItem>
+          </TextField>
+          {dsType === 'SQLITE' && <TextField size="small" label="SQLite file path" value={dsForm.file} onChange={(e) => setDsForm({ ...dsForm, file: e.target.value })} />}
+          {dsType === 'POSTGRES' && <TextField size="small" label="Connection string" value={dsForm.connectionString} onChange={(e) => setDsForm({ ...dsForm, connectionString: e.target.value })} />}
+          {dsType === 'REST' && <TextField size="small" label="Base URL" placeholder="https://api.example.com" value={dsForm.baseUrl} onChange={(e) => setDsForm({ ...dsForm, baseUrl: e.target.value })} />}
+          {dsType === 'MSGRAPH' && <Typography variant="caption" color="text.secondary">Uses the platform's Azure AD app. No config needed.</Typography>}
+          <Stack direction="row" spacing={1}>
+            <Button size="small" onClick={testNew}>Test</Button>
+            <Box flexGrow={1} />
+            <Button size="small" variant="contained" startIcon={<AddIcon />} disabled={!dsName.trim()} onClick={addDataSource}>Add</Button>
+          </Stack>
+        </Stack>
+
+        <Divider sx={{ mb: 2 }} />
+        <Typography variant="subtitle2" gutterBottom>Queries</Typography>
+        <Stack spacing={1} mb={1}>
+          {queries.map((q) => (
+            <Stack key={q.id} direction="row" alignItems="center" spacing={1}>
+              <Typography variant="body2" sx={{ flexGrow: 1 }}>{q.name}</Typography>
+              <IconButton size="small" title="Run" onClick={() => runQ(q.id)}><PlayArrowIcon fontSize="small" /></IconButton>
+              <IconButton size="small" onClick={() => removeQ(q.id)}><DeleteOutlineIcon fontSize="small" /></IconButton>
+            </Stack>
+          ))}
+          {queries.length === 0 && <Typography variant="caption" color="text.secondary">No queries yet.</Typography>}
+        </Stack>
+        {qResult != null && <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1, mb: 1 }}><ResultView data={qResult} /></Box>}
+        <Stack spacing={1.2} sx={{ p: 1.5, border: '1px dashed', borderColor: 'divider', borderRadius: 1 }}>
+          <TextField size="small" label="Query name" value={qName} onChange={(e) => setQName(e.target.value)} />
+          <TextField select size="small" label="Data source" value={qDs} onChange={(e) => setQDs(e.target.value)}>
+            <MenuItem value="">Select…</MenuItem>
+            {dataSources.map((d) => <MenuItem key={d.id} value={d.id}>{d.name} · {TYPE_LABEL[d.type]}</MenuItem>)}
+          </TextField>
+          {(selectedDsType === 'SQLITE' || selectedDsType === 'POSTGRES') && (
+            <TextField label="SQL" value={qSql} onChange={(e) => setQSql(e.target.value)} multiline minRows={3} size="small" slotProps={{ input: { sx: { fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 13 } } }} />
+          )}
+          {(selectedDsType === 'REST' || selectedDsType === 'MSGRAPH') && (
+            <Stack direction="row" spacing={1}>
+              <TextField select size="small" label="Method" value={qMethod} onChange={(e) => setQMethod(e.target.value)} sx={{ width: 110 }}>
+                {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => <MenuItem key={m} value={m}>{m}</MenuItem>)}
+              </TextField>
+              <TextField size="small" fullWidth label={selectedDsType === 'MSGRAPH' ? 'Graph path (e.g. users)' : 'Path (e.g. /users)'} value={qPath} onChange={(e) => setQPath(e.target.value)} />
+            </Stack>
+          )}
+          <Box textAlign="right">
+            <Button size="small" variant="contained" startIcon={<AddIcon />} disabled={!qName.trim() || !qDs} onClick={addQuery}>Save query</Button>
+          </Box>
+        </Stack>
+      </Box>
+    </Drawer>
+  );
+}

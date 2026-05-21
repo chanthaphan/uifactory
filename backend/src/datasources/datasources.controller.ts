@@ -4,28 +4,28 @@ import { CreateDataSourceDto, UpdateDataSourceDto } from './dto/datasource.dto';
 import { CurrentUser } from '../auth/auth.decorators';
 import { AuthUser } from '../auth/auth.types';
 
-@Controller('datasources')
+@Controller('apps/:appId/datasources')
 export class DataSourcesController {
   constructor(private readonly service: DataSourcesService) {}
 
   @Get()
-  findAll(@CurrentUser() user: AuthUser) {
-    return this.service.findAll(user);
+  findAll(@Param('appId') appId: string, @CurrentUser() user: AuthUser) {
+    return this.service.findAll(appId, user);
   }
 
   @Post('test')
-  testInline(@Body() body: CreateDataSourceDto) {
-    return this.service.testInline(body.type, body.config);
+  testInline(@Param('appId') appId: string, @Body() body: CreateDataSourceDto, @CurrentUser() user: AuthUser) {
+    return this.service.testInline(appId, body.type, body.config, user);
+  }
+
+  @Post()
+  create(@Param('appId') appId: string, @Body() dto: CreateDataSourceDto, @CurrentUser() user: AuthUser) {
+    return this.service.create(appId, dto, user);
   }
 
   @Get(':id')
   findOne(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.service.findOne(id, user);
-  }
-
-  @Post()
-  create(@Body() dto: CreateDataSourceDto, @CurrentUser() user: AuthUser) {
-    return this.service.create(dto, user);
   }
 
   @Put(':id')

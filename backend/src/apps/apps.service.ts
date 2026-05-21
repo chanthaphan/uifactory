@@ -8,11 +8,14 @@ import { CreateAppDto, SharingDto, UpdateAppDto } from './dto/app.dto';
 import {
   AppAiConfig,
   AppDefinition,
+  collectQueryIds,
   emptyDefinition,
   mergeAiConfig,
   normalizeDefinition,
   parseAiConfig,
+  parseTemplate,
   redactAiConfig,
+  remapQueryIds,
   slugify,
 } from './app-defs';
 import { decryptString, encryptString } from '../common/crypto.util';
@@ -167,24 +170,52 @@ export class AppsService {
   // ---- mutations ----
 
   async create(dto: CreateAppDto, user: AuthUser) {
-    let definition: AppDefinition = emptyDefinition();
-    if (dto.templateId) {
-      const tpl = await this.prisma.template.findUnique({ where: { id: dto.templateId } });
-      if (!tpl) throw new NotFoundException('Template not found');
-      definition = normalizeDefinition(JSON.parse(tpl.definition));
-    }
+    const bundle = dto.templateId
+      ? parseTemplate((await this.getTemplateOrThrow(dto.templateId)).definition)
+      : { definition: emptyDefinition(), dataSources: [], queries: [] };
+
+    // Create the app first (data sources + queries need its id).
     const app = await this.prisma.app.create({
       data: {
         name: dto.name,
         description: dto.description,
         slug: slugify(dto.name),
-        definition: JSON.stringify(definition),
+        definition: JSON.stringify(bundle.definition),
         ownerId: user.id,
         memberships: { create: [{ userEmail: user.email, role: 'owner' }] },
       },
-      include: this.include,
     });
-    return this.serialize(app, user);
+
+    // Clone the template's data sources + queries under the new app, remap query refs.
+    if (bundle.dataSources.length || bundle.queries.length) {
+      const dsRefMap: Record<string, string> = {};
+      for (const ds of bundle.dataSources) {
+        const created = await this.prisma.dataSource.create({
+          data: { name: ds.name, type: ds.type, config: encryptString(JSON.stringify(ds.config)), appId: app.id },
+        });
+        dsRefMap[ds.ref] = created.id;
+      }
+      const qRefMap: Record<string, string> = {};
+      for (const q of bundle.queries) {
+        const dataSourceId = dsRefMap[q.dataSourceRef];
+        if (!dataSourceId) continue;
+        const created = await this.prisma.query.create({
+          data: { name: q.name, dataSourceId, appId: app.id, config: JSON.stringify(q.config) },
+        });
+        qRefMap[q.ref] = created.id;
+      }
+      const finalDef = remapQueryIds(bundle.definition, qRefMap);
+      await this.prisma.app.update({ where: { id: app.id }, data: { definition: JSON.stringify(finalDef) } });
+    }
+
+    const full = await this.getOrThrow(app.id);
+    return this.serialize(full, user);
+  }
+
+  private async getTemplateOrThrow(id: string) {
+    const tpl = await this.prisma.template.findUnique({ where: { id } });
+    if (!tpl) throw new NotFoundException('Template not found');
+    return tpl;
   }
 
   async update(id: string, dto: UpdateAppDto, user: AuthUser) {
@@ -251,13 +282,7 @@ export class AppsService {
 
   /** All query ids referenced by the active definition — the only ones an app may run. */
   private allowedQueryIds(def: AppDefinition): Set<string> {
-    const ids = new Set<string>();
-    for (const p of def.pages) {
-      if (p.queryId) ids.add(p.queryId);
-      if (p.chat?.queryId) ids.add(p.chat.queryId);
-      for (const a of p.actions ?? []) if (a.queryId) ids.add(a.queryId);
-    }
-    return ids;
+    return new Set(collectQueryIds(def));
   }
 
   async pageData(id: string, pageId: string, user?: AuthUser) {

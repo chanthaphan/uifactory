@@ -23,11 +23,13 @@ import PreviewFrame, { PreviewBridge } from '../components/PreviewFrame';
 import ChatView from '../components/ChatView';
 import AiConnectionForm from '../components/AiConnectionForm';
 import ShareSettings, { ShareMember } from '../components/ShareSettings';
+import DataPanel from '../components/DataPanel';
+import StorageIcon from '@mui/icons-material/Storage';
 
 const rid = () => `page-${Math.random().toString(16).slice(2, 8)}`;
 
 // ---------------- UI page editor ----------------
-function UiPageEditor({ appId, page, onPatch }: { appId: string; page: AppPage; onPatch: (p: Partial<AppPage>) => void }) {
+function UiPageEditor({ appId, page, onPatch, dataVersion }: { appId: string; page: AppPage; onPatch: (p: Partial<AppPage>) => void; dataVersion: number }) {
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
   const [queries, setQueries] = useState<QueryDef[]>([]);
   const [queryId, setQueryId] = useState(page.queryId || '');
@@ -43,17 +45,16 @@ function UiPageEditor({ appId, page, onPatch }: { appId: string; page: AppPage; 
   const [actionQuery, setActionQuery] = useState('');
 
   useEffect(() => {
-    api.listDataSources().then(setDataSources).catch(() => undefined);
-    api.listQueries().then(setQueries).catch(() => undefined);
-  }, []);
+    api.listDataSources(appId).then(setDataSources).catch(() => undefined);
+    api.listQueries(appId).then(setQueries).catch(() => undefined);
+  }, [appId, dataVersion]);
 
   const runQuery = async () => {
-    const q = queries.find((x) => x.id === queryId);
-    if (!q) return;
+    if (!queryId) return;
     setRunning(true);
     setError('');
     try {
-      const res = await api.runInline({ dataSourceId: q.dataSourceId, config: q.config });
+      const res = await api.runQuery(appId, queryId);
       setResult(res.data);
       onPatch({ queryId, sample: JSON.stringify(res.data).slice(0, 100000) });
     } catch (e) {
@@ -94,9 +95,8 @@ function UiPageEditor({ appId, page, onPatch }: { appId: string; page: AppPage; 
     runQuery: (qid, params) => api.appRunQuery(appId, { queryId: qid, params }),
     runAction: (name, params) => api.appRunQuery(appId, { action: name, pageId: page.id, params }),
     refresh: async () => {
-      const q = queries.find((x) => x.id === queryId);
-      if (!q) return { data: result };
-      const res = await api.runInline({ dataSourceId: q.dataSourceId, config: q.config });
+      if (!queryId) return { data: result };
+      const res = await api.runQuery(appId, queryId);
       setResult(res.data);
       return { data: res.data, meta: res.meta };
     },
@@ -171,12 +171,12 @@ function UiPageEditor({ appId, page, onPatch }: { appId: string; page: AppPage; 
 }
 
 // ---------------- chat page editor ----------------
-function ChatPageEditor({ page, appId, saved, onPatch }: { page: AppPage; appId: string; saved: boolean; onPatch: (p: Partial<AppPage>) => void }) {
+function ChatPageEditor({ page, appId, saved, onPatch, dataVersion }: { page: AppPage; appId: string; saved: boolean; onPatch: (p: Partial<AppPage>) => void; dataVersion: number }) {
   const [queries, setQueries] = useState<QueryDef[]>([]);
   const chat = page.chat || {};
   useEffect(() => {
-    api.listQueries().then(setQueries).catch(() => undefined);
-  }, []);
+    api.listQueries(appId).then(setQueries).catch(() => undefined);
+  }, [appId, dataVersion]);
   const patchChat = (p: Partial<NonNullable<AppPage['chat']>>) => onPatch({ chat: { ...chat, ...p } });
 
   return (
@@ -218,6 +218,8 @@ export default function AppEditorPage() {
   const [sharing, setSharing] = useState<{ visibility: Visibility; members: ShareMember[] }>({ visibility: 'private', members: [] });
   const [selectedId, setSelectedId] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [dataOpen, setDataOpen] = useState(false);
+  const [dataVersion, setDataVersion] = useState(0);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState('');
   const [dirty, setDirty] = useState(false);
@@ -301,6 +303,7 @@ export default function AppEditorPage() {
         {app.status === 'deployed' && <Chip size="small" variant="outlined" label={`v${app.version}`} />}
         <Box flexGrow={1} />
         {dirty && <Chip size="small" color="warning" label="Unsaved" />}
+        <Button startIcon={<StorageIcon />} onClick={() => setDataOpen(true)}>Data</Button>
         <Button startIcon={<SettingsIcon />} onClick={() => setSettingsOpen(true)}>Settings</Button>
         <Button variant="outlined" startIcon={<SaveIcon />} onClick={save} disabled={saving}>Save</Button>
         {app.status === 'deployed' && (app.hasUnpublishedChanges || dirty) && (
@@ -345,9 +348,9 @@ export default function AppEditorPage() {
             <Box key={selected.id} sx={{ height: '100%' }}>
               <TextField size="small" label="Page name" value={selected.name} onChange={(e) => patchPage(selected.id, { name: e.target.value })} sx={{ mb: 2 }} />
               {selected.type === 'ui' ? (
-                <UiPageEditor appId={id} page={selected} onPatch={(p) => patchPage(selected.id, p)} />
+                <UiPageEditor appId={id} page={selected} onPatch={(p) => patchPage(selected.id, p)} dataVersion={dataVersion} />
               ) : (
-                <ChatPageEditor page={selected} appId={id} saved={!dirty} onPatch={(p) => patchPage(selected.id, p)} />
+                <ChatPageEditor page={selected} appId={id} saved={!dirty} onPatch={(p) => patchPage(selected.id, p)} dataVersion={dataVersion} />
               )}
             </Box>
           ) : (
@@ -405,6 +408,8 @@ export default function AppEditorPage() {
           </Stack>
         </Box>
       </Drawer>
+
+      <DataPanel appId={id} open={dataOpen} onClose={() => setDataOpen(false)} onChanged={() => setDataVersion((v) => v + 1)} />
 
       <Snackbar open={!!toast} autoHideDuration={2500} onClose={() => setToast('')} message={toast} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }} />
     </Box>
