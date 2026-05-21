@@ -20,6 +20,11 @@ export class UpdateQueryDto {
   name?: string;
 
   @IsOptional()
+  @IsString()
+  @MinLength(1)
+  dataSourceId?: string;
+
+  @IsOptional()
   @IsObject()
   config?: Record<string, unknown>;
 }

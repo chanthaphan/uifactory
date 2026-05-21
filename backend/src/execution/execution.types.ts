@@ -1,8 +1,20 @@
 export type DataSourceType = 'REST' | 'POSTGRES' | 'SQLITE' | 'MSGRAPH';
 
+/** Server-trusted end-user identity forwarded to outbound calls (never client-supplied). */
+export interface RequestIdentity {
+  /** {{user_*}} template values, merged into params with precedence over client input. */
+  context: Record<string, string>;
+  /** Short-lived signed JWT a downstream can verify to authenticate the user. */
+  assertion: string;
+}
+
 export interface RestConfig {
   baseUrl: string;
   headers?: Record<string, string>;
+  /** When true, attach a signed user-identity assertion header to each request. */
+  forwardIdentity?: boolean;
+  /** Header name for the assertion (default: X-UIFactory-User). */
+  identityHeader?: string;
 }
 
 export interface PostgresConfig {

@@ -2,6 +2,35 @@ import { randomBytes } from 'node:crypto';
 
 export type PageType = 'ui' | 'chat';
 
+/** How a UI page is currently being authored. The runtime always renders `html`. */
+export type EditorMode = 'ai' | 'canvas' | 'code';
+
+export type ComponentType =
+  | 'heading'
+  | 'text'
+  | 'metric'
+  | 'table'
+  | 'chart'
+  | 'button'
+  | 'textInput'
+  | 'fileUpload'
+  | 'image'
+  | 'divider'
+  | 'container';
+
+/** A node in the drag-and-drop component tree. `props` is type-specific and free-form. */
+export interface UiComponent {
+  id: string;
+  type: ComponentType;
+  props: Record<string, unknown>;
+  children?: UiComponent[];
+}
+
+/** The source of a drag-and-drop authored page; compiled to `html` for the runtime. */
+export interface CanvasLayout {
+  components: UiComponent[];
+}
+
 export interface AppPage {
   id: string;
   name: string;
@@ -12,6 +41,10 @@ export interface AppPage {
   prompt?: string;
   queryId?: string;
   sample?: string;
+  /** Drag-and-drop component tree (when authored with the visual builder). */
+  layout?: CanvasLayout;
+  /** Remembers which editor the page was last authored in. */
+  editorMode?: EditorMode;
   // chat pages
   chat?: { systemPrompt?: string; queryId?: string; greeting?: string };
   // named queries the page's UI may invoke (interactive reads + write-back)
@@ -23,6 +56,8 @@ export interface AppDefinition {
   theme?: Record<string, unknown>;
   /** When false, only editors/owner/admin may run write (mutation) actions. Default: allow. */
   allowWriteActions?: boolean;
+  /** AGENTS.md/CLAUDE.md-style build guidelines fed to the AI/agent for generation and chat. */
+  buildGuidelines?: string;
 }
 
 export type AiMode = 'platform' | 'provider' | 'agent-api';
@@ -65,6 +100,7 @@ export function normalizeDefinition(raw: unknown): AppDefinition {
       pages: def.pages as AppPage[],
       theme: def.theme as Record<string, unknown> | undefined,
       allowWriteActions: def.allowWriteActions as boolean | undefined,
+      buildGuidelines: def.buildGuidelines as string | undefined,
     };
   }
   // Legacy: { html, queryId?, prompt?, sample? } -> one ui page.
@@ -85,6 +121,69 @@ export function normalizeDefinition(raw: unknown): AppDefinition {
     };
   }
   return { pages: [] };
+}
+
+// ---- Template bundles (self-contained data sources + queries) ----
+
+export interface TemplateDataSource {
+  ref: string; // bundle-local placeholder id
+  name: string;
+  type: string; // REST | POSTGRES | SQLITE | MSGRAPH
+  config: Record<string, unknown>;
+}
+export interface TemplateQuery {
+  ref: string;
+  name: string;
+  dataSourceRef: string;
+  config: Record<string, unknown>;
+}
+export interface TemplateBundle {
+  definition: AppDefinition; // queryId/action refs point at TemplateQuery.ref values
+  dataSources: TemplateDataSource[];
+  queries: TemplateQuery[];
+}
+
+/** All query ids referenced by a definition (page query, chat query, and named actions). */
+export function collectQueryIds(def: AppDefinition): string[] {
+  const ids = new Set<string>();
+  for (const p of def.pages || []) {
+    if (p.queryId) ids.add(p.queryId);
+    if (p.chat?.queryId) ids.add(p.chat.queryId);
+    for (const a of p.actions ?? []) if (a.queryId) ids.add(a.queryId);
+  }
+  return [...ids];
+}
+
+/** Return a copy of the definition with every queryId replaced via the map (unmapped ids kept). */
+export function remapQueryIds(def: AppDefinition, map: Record<string, string>): AppDefinition {
+  const m = (id?: string) => (id && map[id] ? map[id] : id);
+  return {
+    ...def,
+    pages: (def.pages || []).map((p) => ({
+      ...p,
+      queryId: m(p.queryId),
+      chat: p.chat ? { ...p.chat, queryId: m(p.chat.queryId) } : p.chat,
+      actions: p.actions ? p.actions.map((a) => ({ ...a, queryId: m(a.queryId) as string })) : p.actions,
+    })),
+  };
+}
+
+/** Parse a stored template, tolerating both bundle and legacy plain-definition shapes. */
+export function parseTemplate(rawJson: string): TemplateBundle {
+  let obj: Record<string, unknown>;
+  try {
+    obj = JSON.parse(rawJson) as Record<string, unknown>;
+  } catch {
+    return { definition: { pages: [] }, dataSources: [], queries: [] };
+  }
+  if (Array.isArray((obj as { pages?: unknown }).pages)) {
+    return { definition: normalizeDefinition(obj), dataSources: [], queries: [] };
+  }
+  return {
+    definition: normalizeDefinition((obj.definition as unknown) ?? { pages: [] }),
+    dataSources: (obj.dataSources as TemplateDataSource[]) ?? [],
+    queries: (obj.queries as TemplateQuery[]) ?? [],
+  };
 }
 
 export function emptyDefinition(): AppDefinition {

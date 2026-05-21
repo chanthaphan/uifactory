@@ -5,7 +5,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { PrismaClient } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
 import { buildFallbackHtml } from '../src/ai/fallback-generator';
-import { slugify, AppDefinition, AppPage } from '../src/apps/app-defs';
+import { slugify, AppDefinition, AppPage, TemplateBundle, TemplateDataSource, TemplateQuery } from '../src/apps/app-defs';
+import { encryptString } from '../src/common/crypto.util';
 
 const prisma = new PrismaClient();
 
@@ -40,6 +41,26 @@ function buildSampleDatabase() {
       total REAL NOT NULL,
       status TEXT NOT NULL,
       ordered_at TEXT NOT NULL
+    );
+    CREATE TABLE accounts (
+      id INTEGER PRIMARY KEY,
+      holder TEXT NOT NULL,
+      account_no TEXT NOT NULL,
+      type TEXT NOT NULL,
+      balance REAL NOT NULL,
+      currency TEXT NOT NULL,
+      opened_at TEXT NOT NULL
+    );
+    CREATE TABLE transactions (
+      id INTEGER PRIMARY KEY,
+      account_id INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      category TEXT NOT NULL,
+      amount REAL NOT NULL,
+      currency TEXT NOT NULL,
+      status TEXT NOT NULL,
+      description TEXT NOT NULL,
+      created_at TEXT NOT NULL
     );
   `);
 
@@ -89,6 +110,44 @@ function buildSampleDatabase() {
     insOrder.run(orderId++, customerId, productId + 1, qty, total, status, orderedAt);
   }
 
+  // ---- retail-banking demo data (for the bank templates) ----
+  const accounts = [
+    ['Somchai Phan', 'TH-100001', 'Savings', 84210.55, 'THB'],
+    ['Aroon Srisuk', 'TH-100002', 'Current', 12050.0, 'THB'],
+    ['Mei Lin', 'TH-100003', 'Savings', 305980.2, 'THB'],
+    ['John Carter', 'TH-100004', 'Current', 4520.75, 'THB'],
+    ['Priya Nair', 'TH-100005', 'Savings', 67310.0, 'THB'],
+    ['Kenji Watanabe', 'TH-100006', 'Current', 158900.4, 'THB'],
+  ];
+  const insAccount = db.prepare('INSERT INTO accounts (id,holder,account_no,type,balance,currency,opened_at) VALUES (?,?,?,?,?,?,?)');
+  accounts.forEach((a, i) => {
+    const d = new Date(Date.now() - (900 - i * 40) * 86400000).toISOString().slice(0, 10);
+    insAccount.run(i + 1, a[0], a[1], a[2], a[3], a[4], d);
+  });
+
+  const txnCats: [string, 'debit' | 'credit', string][] = [
+    ['Groceries', 'debit', 'Big C supermarket'],
+    ['Dining', 'debit', 'Restaurant POS'],
+    ['Utilities', 'debit', 'MEA electricity bill'],
+    ['Transfer', 'debit', 'PromptPay transfer'],
+    ['ATM', 'debit', 'ATM withdrawal'],
+    ['Fees', 'debit', 'Monthly account fee'],
+    ['Salary', 'credit', 'Payroll deposit'],
+    ['Refund', 'credit', 'Merchant refund'],
+    ['Interest', 'credit', 'Savings interest'],
+  ];
+  const txnStatuses = ['posted', 'pending', 'reversed'];
+  const insTxn = db.prepare('INSERT INTO transactions (id,account_id,type,category,amount,currency,status,description,created_at) VALUES (?,?,?,?,?,?,?,?,?)');
+  for (let i = 0; i < 60; i++) {
+    const accountId = (i % accounts.length) + 1;
+    const [category, type, description] = txnCats[i % txnCats.length];
+    const base = type === 'credit' ? 1500 + (i % 7) * 4200 : 80 + (i % 11) * 360;
+    const amount = Number((base + (i % 5) * 13.5).toFixed(2));
+    const status = txnStatuses[i % 3 === 0 ? (i % 9 === 0 ? 2 : 0) : 0 + (i % 5 === 0 ? 1 : 0)];
+    const createdAt = new Date(Date.now() - (60 - i) * 43200000).toISOString().slice(0, 19).replace('T', ' ');
+    insTxn.run(i + 1, accountId, type, category, amount, 'THB', status, description, createdAt);
+  }
+
   db.close();
   return SAMPLE_DB;
 }
@@ -100,8 +159,9 @@ async function main() {
 
   console.log('Resetting UIFactory metadata…');
   await prisma.appMembership.deleteMany();
-  await prisma.app.deleteMany();
+  await prisma.app.deleteMany(); // cascades AppVersion
   await prisma.template.deleteMany();
+  await prisma.connector.deleteMany();
   await prisma.query.deleteMany();
   await prisma.dataSource.deleteMany();
   await prisma.setting.deleteMany();
@@ -114,118 +174,49 @@ async function main() {
   await prisma.user.create({ data: { email: 'alice@uifactory.local', name: 'Alice Member', role: 'member' } });
   await prisma.user.create({ data: { email: 'bob@uifactory.local', name: 'Bob Member', role: 'member' } });
 
-  // Built-in SQLite data source (works out of the box).
-  const sqliteDs = await prisma.dataSource.create({
-    data: {
-      name: 'Sample Business DB (SQLite)',
-      type: 'SQLITE',
-      config: JSON.stringify({ file: sampleDbPath }),
-    },
-  });
-
-  // Public REST data source for demoing the "generate UI from API output" flow.
-  const restDs = await prisma.dataSource.create({
-    data: {
-      name: 'JSONPlaceholder (REST API)',
-      type: 'REST',
-      config: JSON.stringify({ baseUrl: 'https://jsonplaceholder.typicode.com' }),
-    },
-  });
-
-  const ordersQuery = await prisma.query.create({
-    data: {
-      name: 'Recent orders with customer + product',
-      dataSourceId: sqliteDs.id,
-      config: JSON.stringify({
-        sql: `SELECT o.id, c.name AS customer, p.name AS product, o.quantity, o.total, o.status, o.ordered_at
-FROM orders o
-JOIN customers c ON c.id = o.customer_id
-JOIN products p ON p.id = o.product_id
-ORDER BY o.ordered_at DESC
-LIMIT 25;`,
-      }),
-    },
-  });
-  const revenueQuery = await prisma.query.create({
-    data: {
-      name: 'Revenue by product category',
-      dataSourceId: sqliteDs.id,
-      config: JSON.stringify({
-        sql: `SELECT p.category, COUNT(*) AS orders, ROUND(SUM(o.total), 2) AS revenue
-FROM orders o JOIN products p ON p.id = o.product_id
-GROUP BY p.category
-ORDER BY revenue DESC;`,
-      }),
-    },
-  });
-  const customersQuery = await prisma.query.create({
-    data: {
-      name: 'All customers',
-      dataSourceId: sqliteDs.id,
-      config: JSON.stringify({ sql: 'SELECT id, name, email, country, created_at FROM customers ORDER BY created_at DESC;' }),
-    },
-  });
-  const productsQuery = await prisma.query.create({
-    data: {
-      name: 'Product catalog',
-      dataSourceId: sqliteDs.id,
-      config: JSON.stringify({ sql: 'SELECT id, name, category, price FROM products ORDER BY category, name;' }),
-    },
-  });
-  const ordersByStatusQuery = await prisma.query.create({
-    data: {
-      name: 'Orders by status',
-      dataSourceId: sqliteDs.id,
-      config: JSON.stringify({
-        sql: `SELECT o.id, c.name AS customer, p.name AS product, o.total, o.status, o.ordered_at
-FROM orders o JOIN customers c ON c.id = o.customer_id JOIN products p ON p.id = o.product_id
-WHERE o.status = {{status}}
-ORDER BY o.ordered_at DESC;`,
-      }),
-    },
-  });
-  const addCustomerQuery = await prisma.query.create({
-    data: {
-      name: 'Add customer',
-      dataSourceId: sqliteDs.id,
-      config: JSON.stringify({
-        sql: `INSERT INTO customers (name, email, country, created_at) VALUES ({{name}}, {{email}}, {{country}}, date('now'));`,
-      }),
-    },
-  });
-  const restUsersQuery = await prisma.query.create({
-    data: { name: 'GET /users', dataSourceId: restDs.id, config: JSON.stringify({ method: 'GET', path: '/users' }) },
-  });
-  await prisma.query.create({
-    data: { name: 'GET /posts', dataSourceId: restDs.id, config: JSON.stringify({ method: 'GET', path: '/posts' }) },
-  });
-
   console.log('Creating templates…');
   const pid = () => `page-${randomBytes(3).toString('hex')}`;
-  const samples = {
-    orders: JSON.stringify([
-      { id: 40, customer: 'Wayne Enterprises', product: 'Coffee Subscription', quantity: 4, total: 236, status: 'refunded' },
-      { id: 39, customer: 'Stark Manufacturing', product: 'Laptop Pro 16', quantity: 3, total: 7197, status: 'shipped' },
-    ]),
-    revenue: JSON.stringify([
-      { category: 'Electronics', orders: 20, revenue: 42860 },
-      { category: 'Furniture', orders: 10, revenue: 7700 },
-    ]),
-    customers: JSON.stringify([
-      { id: 1, name: 'Acme Robotics', email: 'ops@acme.io', country: 'USA', created_at: '2026-03-22' },
-      { id: 2, name: 'Globex Foods', email: 'buy@globex.com', country: 'Canada', created_at: '2026-03-27' },
-    ]),
-    products: JSON.stringify([
-      { id: 1, name: 'Standing Desk', category: 'Furniture', price: 420 },
-      { id: 3, name: 'Laptop Pro 16', category: 'Electronics', price: 2399 },
-    ]),
-    users: JSON.stringify([
-      { id: 1, name: 'Leanne Graham', username: 'Bret', email: 'Sincere@april.biz' },
-      { id: 2, name: 'Ervin Howell', username: 'Antonette', email: 'Shanna@melissa.tv' },
-    ]),
+
+  // Portable bundle building blocks: data sources + queries referenced by local refs.
+  // The "Agent API" is the org's deployed agent (set its base URL after cloning). Its responses are
+  // intentionally dynamic (plain text or arbitrary JSON), so generated UIs decode them at runtime.
+  const DS: Record<'sqlite' | 'agent', TemplateDataSource> = {
+    sqlite: { ref: 'sqlite', name: 'Core Banking DB (SQLite)', type: 'SQLITE', config: { file: sampleDbPath } },
+    agent: { ref: 'agent', name: 'Agent API (set your endpoint URL)', type: 'REST', config: { baseUrl: 'https://your-agent.example.com' } },
   };
-  const ordersSample = samples.orders;
-  const ordersHtml = buildFallbackHtml('Orders dashboard with a sortable, filterable table', ordersSample, 'Orders');
+  const Q: Record<string, TemplateQuery> = {
+    // banking data (SQLite)
+    transactions: { ref: 'q-transactions', name: 'Recent transactions', dataSourceRef: 'sqlite', config: { sql: `SELECT t.id, a.holder, a.account_no, t.type, t.category, t.amount, t.currency, t.status, t.description, t.created_at\nFROM transactions t JOIN accounts a ON a.id = t.account_id ORDER BY t.created_at DESC LIMIT 50;` } },
+    spendByCategory: { ref: 'q-spend-category', name: 'Spend by category', dataSourceRef: 'sqlite', config: { sql: `SELECT category, ROUND(SUM(amount),2) AS total, COUNT(*) AS transactions\nFROM transactions WHERE type = 'debit' GROUP BY category ORDER BY total DESC;` } },
+    // agent-as-API calls (dynamic responses the UI must decode)
+    translate: { ref: 'q-translate', name: 'Translate (agent)', dataSourceRef: 'agent', config: { method: 'POST', path: '/translate', body: { text: '{{text}}', target_language: '{{target}}' }, schema: 'POST { text, target_language }. The agent replies with the translation as a plain string OR an object like { "translation": "..." }. Render whatever text comes back; do not assume a fixed key.' } },
+    extract: { ref: 'q-extract', name: 'Extract PDF text (agent)', dataSourceRef: 'agent', config: { method: 'POST', path: '/extract', body: { filename: '{{filename}}', content_base64: '{{contentBase64}}' }, schema: 'POST a base64-encoded PDF { filename, content_base64 }. Returns the extracted text as a plain string OR { "text": "..." }.' } },
+    parse: { ref: 'q-parse', name: 'Parse text to table (agent)', dataSourceRef: 'agent', config: { method: 'POST', path: '/parse', body: { text: '{{text}}', instructions: '{{instructions}}' }, schema: 'POST raw text { text, instructions? }. Returns a DYNAMIC JSON array of row objects whose columns are not known ahead of time. Build the table by reading keys from the rows at runtime.' } },
+  };
+  const dsByRef: Record<string, TemplateDataSource> = { sqlite: DS.sqlite, agent: DS.agent };
+  const bundle = (pages: AppPage[], queries: TemplateQuery[] = [], guidelines?: string): TemplateBundle => {
+    const refs = [...new Set(queries.map((q) => q.dataSourceRef))];
+    return {
+      definition: { pages, ...(guidelines ? { buildGuidelines: guidelines } : {}) },
+      dataSources: refs.map((r) => dsByRef[r]),
+      queries,
+    };
+  };
+
+  // Shared guidance for templates that call the dynamic Agent API.
+  const DYNAMIC_GUIDE = [
+    'This app calls an external Agent API whose response shape is DYNAMIC: it may be a plain text string, a JSON object, or a JSON array, and field names can vary per request.',
+    'Generated UIs must NOT assume a fixed schema. At runtime: if the response is a string, render it as text/markdown; if it is an array of objects, render a table whose columns are derived from the row keys; if it is an object, render a labelled key/value detail view (surface any obvious main-text field prominently).',
+    'Always show loading and error states: read the user input, call the relevant UIFactory.runAction(...), then decode and display whatever comes back.',
+  ].join('\n');
+
+  const samples = {
+    transactions: JSON.stringify([
+      { id: 60, holder: 'Kenji Watanabe', account_no: 'TH-100006', type: 'credit', category: 'Salary', amount: 26700, currency: 'THB', status: 'posted', description: 'Payroll deposit', created_at: '2026-05-21 06:00:00' },
+      { id: 59, holder: 'Priya Nair', account_no: 'TH-100005', type: 'debit', category: 'Groceries', amount: 1240.5, currency: 'THB', status: 'posted', description: 'Big C supermarket', created_at: '2026-05-20 18:00:00' },
+    ]),
+    empty: '{}',
+  };
 
   const uiPage = (
     name: string,
@@ -253,86 +244,118 @@ ORDER BY o.ordered_at DESC;`,
     chat: { systemPrompt, greeting, ...(queryId ? { queryId } : {}) },
   });
 
-  const templates: { name: string; description: string; category: string; definition: AppDefinition }[] = [
-    { name: 'Orders Dashboard', description: 'Sortable, filterable table of recent orders.', category: 'Dashboard',
-      definition: { pages: [uiPage('Orders', 'orders', ordersQuery.id, 'Orders dashboard with a sortable, filterable table and a row/total summary', samples.orders)] } },
-    { name: 'Revenue Analytics', description: 'Revenue by category with summary cards and a chart.', category: 'Dashboard',
-      definition: { pages: [uiPage('Revenue', 'revenue', revenueQuery.id, 'Revenue analytics: summary cards for totals plus a bar chart of revenue by category and a breakdown table', samples.revenue)] } },
-    { name: 'Customer Directory', description: 'Searchable directory of customers.', category: 'Dashboard',
-      definition: { pages: [uiPage('Customers', 'customers', customersQuery.id, 'Customer directory: a searchable, sortable table with a country filter', samples.customers)] } },
-    { name: 'Product Catalog', description: 'Products grouped by category.', category: 'Dashboard',
-      definition: { pages: [uiPage('Products', 'products', productsQuery.id, 'Product catalog: cards grouped by category showing name and price, with a search box', samples.products)] } },
-    { name: 'REST API Explorer', description: 'Render data returned by a REST API.', category: 'Integration',
-      definition: { pages: [uiPage('Users', 'users', restUsersQuery.id, 'A table of users returned by the REST API with a text filter', samples.users)] } },
-    { name: 'Executive KPI Summary', description: 'High-level KPI cards from revenue data.', category: 'Dashboard',
-      definition: { pages: [uiPage('Summary', 'summary', revenueQuery.id, 'Executive summary: large KPI cards for total revenue, total orders, and the top category', samples.revenue)] } },
-    { name: 'Support Assistant', description: 'A conversational chat assistant.', category: 'Chat',
-      definition: { pages: [chatPage('Assistant', 'assistant', 'You are a friendly support assistant for our internal tools.', 'Hi! How can I help you today?')] } },
-    { name: 'Data Analyst (grounded)', description: 'Chat grounded on revenue data.', category: 'Chat',
-      definition: { pages: [chatPage('Analyst', 'analyst', 'You are a data analyst. Answer using the provided revenue dataset and cite the numbers.', 'Ask me about revenue by category.', revenueQuery.id)] } },
-    { name: 'SQL Query Helper', description: 'Assistant that helps write and explain SQL.', category: 'Chat',
-      definition: { pages: [chatPage('SQL Helper', 'sql-helper', 'You are an expert SQL assistant. Help the user write and explain SQL queries.', 'Describe the query you need and I will help you write the SQL.')] } },
-    { name: 'Operations Console', description: 'Multi-page: orders dashboard + AI assistant.', category: 'Multi-page',
-      definition: { pages: [uiPage('Orders', 'orders', ordersQuery.id, 'Orders dashboard table', samples.orders), chatPage('Assistant', 'assistant', 'You are an operations analyst for the orders app.', 'How can I help with operations?', revenueQuery.id)] } },
-    { name: 'Customer 360', description: 'Multi-page: customer directory + grounded chat.', category: 'Multi-page',
-      definition: { pages: [uiPage('Customers', 'customers', customersQuery.id, 'Customer directory table', samples.customers), chatPage('Assistant', 'assistant', 'You are a CRM assistant. Use the customer dataset to answer questions.', 'Ask me about our customers.', customersQuery.id)] } },
-    { name: 'Customer Admin (CRUD)', description: 'Customer table plus an add-customer form (write-back).', category: 'Forms',
-      definition: { pages: [uiPage('Customers', 'customers', customersQuery.id,
-        'A customer admin screen: a table of customers, plus an "Add customer" form with name, email and country fields. On submit call UIFactory.runAction("createCustomer", {name, email, country}) then UIFactory.refresh().',
-        samples.customers, [{ name: 'createCustomer', queryId: addCustomerQuery.id }, { name: 'listCustomers', queryId: customersQuery.id }])] } },
-    { name: 'Orders by Status (filter)', description: 'Interactive orders list with a status filter.', category: 'Interactive',
-      definition: { pages: [uiPage('Orders', 'orders', ordersQuery.id,
-        'Orders list with a status dropdown (paid, pending, shipped, refunded). When it changes, call UIFactory.runAction("byStatus", {status}) and re-render the table with the returned rows.',
-        samples.orders, [{ name: 'byStatus', queryId: ordersByStatusQuery.id }])] } },
-    { name: 'Blank Dashboard', description: 'Start from an empty UI page.', category: 'Starter',
-      definition: { pages: [{ id: pid(), name: 'Home', slug: 'home', type: 'ui' }] } },
+  const templates: { name: string; description: string; category: string; bundle: TemplateBundle }[] = [
+    { name: 'Conversational Banking Agent', description: 'A retail-banking virtual assistant. Pair it with your deployed Agent API in Settings → AI / agent connection.', category: 'Agent',
+      bundle: bundle([chatPage('Assistant', 'assistant',
+        'You are a helpful retail-banking virtual assistant. Be concise and accurate, never invent account balances or personal data, and ask the customer to authenticate before sharing anything sensitive. Use markdown for structure.',
+        'Hi! I can help with accounts, cards, payments and general banking questions. How can I help today?')],
+        [], 'Replies come from a deployed conversation Agent API and are plain text/markdown — render them directly.') },
+
+    { name: 'Contact Center Knowledge Base', description: 'Agent-assist KB lookup for contact-center staff. Connect a Knowledge Base Agent API.', category: 'Agent',
+      bundle: bundle([chatPage('Knowledge Base', 'kb',
+        'You are a contact-center knowledge-base assistant for bank agents. Answer strictly from the knowledge base and cite the article title you used. If the KB does not cover it, say so and suggest escalation. Keep answers short and actionable.',
+        'Ask a customer question and I will find the answer from the knowledge base.')],
+        [], 'Backed by a Knowledge Base Agent API. Render the agent\'s markdown answer and any cited sources directly.') },
+
+    { name: 'Chat with your data', description: 'Ask questions in natural language about live transaction data.', category: 'Data',
+      bundle: bundle([chatPage('Data Chat', 'data-chat',
+        'You are a banking data analyst. Answer using ONLY the provided transactions dataset (JSON). Show the numbers you used and a short explanation. If the data does not contain the answer, say so.',
+        'Ask me about recent transactions, spend by category, or account activity.', Q.transactions.ref)],
+        [Q.transactions]) },
+
+    { name: 'Translate Side-by-Side', description: 'Side-by-side translator backed by a translation Agent API.', category: 'Agent',
+      bundle: bundle([uiPage('Translate', 'translate', '',
+        'Build a side-by-side translator for a bank. Left pane: a large source-text textarea and a target-language dropdown (English, Thai, Chinese, Japanese, Spanish). Right pane: the translation. On "Translate", call UIFactory.runAction("translate", { text, target }). The agent may return a plain string or an object like { translation }; detect the shape at runtime and show the resulting text. Include loading and error states and a copy button.',
+        samples.empty, [{ name: 'translate', queryId: Q.translate.ref }])],
+        [Q.translate], DYNAMIC_GUIDE) },
+
+    { name: 'PDF Text Extraction', description: 'Upload a PDF; an Agent API returns the extracted text.', category: 'Documents',
+      bundle: bundle([uiPage('Extract', 'extract', '',
+        'Build a PDF text-extraction tool. Provide a file input (accept "application/pdf"). On selection, call UIFactory.readFile(input.files[0]); take the base64 part of result.dataUrl (after the comma) and call UIFactory.runAction("extract", { filename: result.name, contentBase64 }). The agent returns the extracted text as a string or { text }. Render it in a scrollable panel with a copy-to-clipboard button; show progress while extracting and handle errors.',
+        samples.empty, [{ name: 'extract', queryId: Q.extract.ref }])],
+        [Q.extract], DYNAMIC_GUIDE) },
+
+    { name: 'Parse Text into a Table', description: 'Paste freeform text; an Agent API returns structured rows to render as a table.', category: 'Documents',
+      bundle: bundle([uiPage('Parse', 'parse', '',
+        'Build a "text to table" tool. A large textarea for pasted text plus an optional "columns / instructions" field. On submit, call UIFactory.runAction("parse", { text, instructions }). The agent returns a DYNAMIC JSON array of row objects whose keys are not known in advance. At runtime, derive the table header from the first row\'s keys, render all rows, and add a CSV download via UIFactory.downloadCSV. If the response is a string, display it as-is.',
+        samples.empty, [{ name: 'parse', queryId: Q.parse.ref }])],
+        [Q.parse], DYNAMIC_GUIDE) },
+
+    { name: 'Transactions Dashboard', description: 'KPI cards, spend-by-category chart and a filterable transactions table.', category: 'Dashboard',
+      bundle: bundle([uiPage('Transactions', 'transactions', Q.transactions.ref,
+        'A retail-banking transactions dashboard: KPI cards (total credits, total debits, transaction count), a bar chart of spend by category (debits only), and a filterable, sortable transactions table (date, holder, account, type, category, amount, status). Format money with its currency and include a text filter.',
+        samples.transactions)],
+        [Q.transactions]) },
+
+    { name: 'Agent Console (chat + documents)', description: 'Multi-page: a conversation agent plus a parse-to-table tool.', category: 'Multi-page',
+      bundle: bundle([
+        chatPage('Assistant', 'assistant', 'You are a banking operations assistant. Be concise and cite data when available.', 'How can I help?'),
+        uiPage('Parse', 'parse', '', 'Paste text and call UIFactory.runAction("parse", { text }); render the dynamic array the agent returns as a table.', samples.empty, [{ name: 'parse', queryId: Q.parse.ref }]),
+      ], [Q.parse], DYNAMIC_GUIDE) },
+
+    { name: 'Blank Dashboard', description: 'Start from an empty UI page (drag-and-drop or AI generate).', category: 'Starter',
+      bundle: bundle([{ id: pid(), name: 'Home', slug: 'home', type: 'ui' }]) },
     { name: 'Blank Chat', description: 'Start from an empty chat page.', category: 'Starter',
-      definition: { pages: [{ id: pid(), name: 'Chat', slug: 'chat', type: 'chat', chat: { greeting: 'Hi! How can I help?' } }] } },
+      bundle: bundle([{ id: pid(), name: 'Chat', slug: 'chat', type: 'chat', chat: { greeting: 'Hi! How can I help?' } }]) },
   ];
 
   for (const t of templates) {
     await prisma.template.create({
-      data: { name: t.name, description: t.description, category: t.category, definition: JSON.stringify(t.definition), createdById: admin.id },
+      data: { name: t.name, description: t.description, category: t.category, definition: JSON.stringify(t.bundle), createdById: admin.id },
     });
   }
   console.log(`  -> ${templates.length} templates created`);
 
+  console.log('Creating prebuilt connectors…');
+  const connectors: { name: string; description: string; category: string; type: string; config: Record<string, unknown> }[] = [
+    { name: 'Core Banking DB (SQLite)', description: 'Seeded accounts & transactions demo database.', category: 'Internal', type: 'SQLITE', config: { file: sampleDbPath } },
+    { name: 'Agent API (your deployed agent)', description: 'Your agent-builder endpoint. Returns dynamic text/JSON that the app decodes for chat, translation, extraction and parsing.', category: 'Agent', type: 'REST', config: { baseUrl: 'https://your-agent.example.com' } },
+    { name: 'Microsoft 365 (Graph)', description: 'Org directory, mail and calendar via Microsoft Graph.', category: 'Microsoft', type: 'MSGRAPH', config: {} },
+  ];
+  for (const c of connectors) {
+    await prisma.connector.create({
+      data: { name: c.name, description: c.description, category: c.category, type: c.type, config: encryptString(JSON.stringify(c.config)), createdById: admin.id },
+    });
+  }
+  console.log(`  -> ${connectors.length} prebuilt connectors created`);
+
   console.log('Creating a sample deployed app…');
-  const sampleAppDef: AppDefinition = {
-    pages: [
-      { id: pid(), name: 'Orders', slug: 'orders', type: 'ui', queryId: ordersQuery.id, prompt: 'Orders dashboard table', html: ordersHtml, sample: ordersSample },
-      {
-        id: pid(),
-        name: 'Assistant',
-        slug: 'assistant',
-        type: 'chat',
-        chat: { systemPrompt: 'You are a business analyst for the Orders app. Answer using the revenue data.', queryId: revenueQuery.id, greeting: 'Ask me about revenue by category.' },
-      },
-    ],
-  };
-  const sampleDefJson = JSON.stringify(sampleAppDef);
-  await prisma.app.create({
+  const sApp = await prisma.app.create({
     data: {
-      name: 'Orders Operations',
-      description: 'Sample multi-page app: an orders dashboard plus an AI assistant.',
-      slug: slugify('Orders Operations'),
-      definition: sampleDefJson,
-      publishedDefinition: sampleDefJson,
-      version: 1,
-      visibility: 'org',
-      status: 'deployed',
-      deployedAt: new Date(),
+      name: 'Retail Banking Console',
+      description: 'Sample multi-page app: a transactions dashboard plus a data-grounded assistant.',
+      slug: slugify('Retail Banking Console'),
+      definition: JSON.stringify({ pages: [] }),
       ownerId: admin.id,
       memberships: { create: [{ userEmail: admin.email, role: 'owner' }] },
     },
+  });
+  const sDs = await prisma.dataSource.create({
+    data: { name: DS.sqlite.name, type: 'SQLITE', config: encryptString(JSON.stringify(DS.sqlite.config)), appId: sApp.id },
+  });
+  const sTxns = await prisma.query.create({ data: { name: Q.transactions.name, dataSourceId: sDs.id, appId: sApp.id, config: JSON.stringify(Q.transactions.config) } });
+  const sampleDef: AppDefinition = {
+    pages: [
+      uiPage('Transactions', 'transactions', sTxns.id,
+        'A retail-banking transactions dashboard: KPI cards (total credits, total debits, count), a bar chart of spend by category, and a filterable, sortable transactions table.',
+        samples.transactions),
+      chatPage('Assistant', 'assistant', 'You are a banking data analyst. Answer using the provided transactions dataset and cite the numbers.', 'Ask me about recent transactions or spend by category.', sTxns.id),
+    ],
+  };
+  const sampleJson = JSON.stringify(sampleDef);
+  await prisma.app.update({
+    where: { id: sApp.id },
+    data: { definition: sampleJson, publishedDefinition: sampleJson, version: 1, visibility: 'org', status: 'deployed', deployedAt: new Date() },
+  });
+  await prisma.appVersion.create({
+    data: { appId: sApp.id, version: 1, definition: sampleJson, note: 'Initial published version', createdById: admin.id },
   });
 
   await prisma.setting.create({ data: { key: 'platformName', value: JSON.stringify('UIFactory') } });
 
   console.log('Seed complete:');
   console.log('  - 3 users (1 admin, 2 members)');
-  console.log('  - 2 data sources (SQLite + REST), 8 queries');
-  console.log(`  - ${templates.length} templates, 1 deployed sample app`);
+  console.log(`  - ${templates.length} templates (self-contained bundles), 1 deployed sample app`);
 }
 
 main()

@@ -5,7 +5,6 @@ import {
 } from '@mui/material';
 import AppsIcon from '@mui/icons-material/Apps';
 import BuildIcon from '@mui/icons-material/Build';
-import StorageIcon from '@mui/icons-material/Storage';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import LogoutIcon from '@mui/icons-material/Logout';
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
@@ -14,7 +13,6 @@ import LoginPage from './pages/LoginPage';
 import CatalogPage from './pages/CatalogPage';
 import MyAppsPage from './pages/MyAppsPage';
 import AppEditorPage from './pages/AppEditorPage';
-import DataSourcesPage from './pages/DataSourcesPage';
 import AdminPage from './pages/AdminPage';
 import AppRunnerPage from './pages/AppRunnerPage';
 
@@ -26,7 +24,6 @@ function NavBar() {
   const nav = [
     { to: '/', label: 'Catalog', icon: <AppsIcon fontSize="small" /> },
     { to: '/build', label: 'Build', icon: <BuildIcon fontSize="small" /> },
-    { to: '/datasources', label: 'Data Sources', icon: <StorageIcon fontSize="small" /> },
     ...(isAdmin ? [{ to: '/admin', label: 'Admin', icon: <AdminPanelSettingsIcon fontSize="small" /> }] : []),
   ];
   const active = (to: string) => (to === '/' ? location.pathname === '/' : location.pathname.startsWith(to));
@@ -76,7 +73,6 @@ function Shell() {
           <Route path="/" element={<CatalogPage />} />
           <Route path="/build" element={<MyAppsPage />} />
           <Route path="/build/:id" element={<AppEditorPage />} />
-          <Route path="/datasources" element={<DataSourcesPage />} />
           <Route path="/admin" element={isAdmin ? <AdminPage /> : <Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
