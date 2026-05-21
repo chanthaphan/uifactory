@@ -3,8 +3,11 @@ import { Response } from 'express';
 import { AppsService } from './apps.service';
 import { ChatDto, CreateAppDto, RunQueryDto, SharingDto, UpdateAppDto } from './dto/app.dto';
 import { GenerateUiDto } from '../ai/dto/generate.dto';
-import { CurrentUser, Public } from '../auth/auth.decorators';
+import { CurrentUser, Public, Roles } from '../auth/auth.decorators';
 import { AuthUser } from '../auth/auth.types';
+
+/** Authoring (create/edit/deploy/generate) is for builders; viewers can only run/view shared apps. */
+const BUILDERS = ['admin', 'member'] as const;
 
 @Controller('apps')
 export class AppsController {
@@ -31,41 +34,49 @@ export class AppsController {
     return this.service.findOne(id, user);
   }
 
+  @Roles(...BUILDERS)
   @Post()
   create(@Body() dto: CreateAppDto, @CurrentUser() user: AuthUser) {
     return this.service.create(dto, user);
   }
 
+  @Roles(...BUILDERS)
   @Put(':id')
   update(@Param('id') id: string, @Body() dto: UpdateAppDto, @CurrentUser() user: AuthUser) {
     return this.service.update(id, dto, user);
   }
 
+  @Roles(...BUILDERS)
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.service.remove(id, user);
   }
 
+  @Roles(...BUILDERS)
   @Post(':id/deploy')
   deploy(@Param('id') id: string, @Body() body: { note?: string }, @CurrentUser() user: AuthUser) {
     return this.service.setDeployed(id, true, user, body?.note);
   }
 
+  @Roles(...BUILDERS)
   @Post(':id/undeploy')
   undeploy(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.service.setDeployed(id, false, user);
   }
 
+  @Roles(...BUILDERS)
   @Get(':id/versions')
   versions(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.service.listVersions(id, user);
   }
 
+  @Roles(...BUILDERS)
   @Post(':id/rollback')
   rollback(@Param('id') id: string, @Body() body: { version: number }, @CurrentUser() user: AuthUser) {
     return this.service.rollback(id, Number(body?.version), user);
   }
 
+  @Roles(...BUILDERS)
   @Put(':id/sharing')
   setSharing(@Param('id') id: string, @Body() dto: SharingDto, @CurrentUser() user: AuthUser) {
     return this.service.setSharing(id, dto, user);
@@ -83,6 +94,7 @@ export class AppsController {
     return this.service.runQueryAction(id, dto, user);
   }
 
+  @Roles(...BUILDERS)
   @Post(':id/generate-ui')
   generateUi(@Param('id') id: string, @Body() dto: GenerateUiDto, @CurrentUser() user: AuthUser) {
     return this.service.generateUi(id, dto, user);

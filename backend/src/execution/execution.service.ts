@@ -81,7 +81,20 @@ export class ExecutionService {
           throw new BadRequestException('baseUrl is not a valid URL');
         }
         await assertSafeUrl(cfg.baseUrl);
-        return { ok: true, message: `Base URL looks valid (${origin})` };
+        try {
+          const res = await axios.request({
+            url: cfg.baseUrl,
+            method: 'GET',
+            headers: cfg.headers || {},
+            timeout: REQUEST_TIMEOUT_MS,
+            validateStatus: () => true,
+            maxContentLength: 2_000_000,
+            maxRedirects: 3,
+          });
+          return { ok: true, message: `Reached ${origin} (HTTP ${res.status})` };
+        } catch (err) {
+          throw new BadRequestException(`Could not reach ${origin}: ${(err as AxiosError).message}`);
+        }
       }
       case 'POSTGRES': {
         const cfg = dsConfig as unknown as PostgresConfig;
@@ -119,6 +132,12 @@ export class ExecutionService {
         } catch (err) {
           throw new BadRequestException(`Microsoft Graph auth failed: ${(err as Error).message}`);
         }
+      }
+      case 'AGENT': {
+        const url = dsConfig.url as string | undefined;
+        if (!url) throw new BadRequestException('Agent API data source requires a url');
+        await assertSafeUrl(url);
+        return { ok: true, message: `Agent API endpoint configured (${new URL(url).origin})` };
       }
       default:
         throw new BadRequestException(`Unsupported data source type: ${type}`);

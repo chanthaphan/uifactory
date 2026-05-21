@@ -1,7 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { decryptString, encryptString } from '../common/crypto.util';
 import { redactConfig } from '../common/redact.util';
+import { mergeConfigPreservingSecrets } from '../common/secret-merge.util';
+import { validateDataSourceConfig } from '../datasources/config-validation';
 import { DataSourceType } from '../execution/execution.types';
 import { CreateConnectorDto, UpdateConnectorDto } from './dto/connector.dto';
 import { AuthUser } from '../auth/auth.types';
@@ -41,6 +43,8 @@ export class ConnectorsService {
   }
 
   async create(dto: CreateConnectorDto, user: AuthUser) {
+    const invalid = validateDataSourceConfig(dto.type, dto.config);
+    if (invalid) throw new BadRequestException(invalid);
     const row = await this.prisma.connector.create({
       data: {
         name: dto.name,
@@ -62,7 +66,13 @@ export class ConnectorsService {
     if (dto.description !== undefined) data.description = dto.description;
     if (dto.category !== undefined) data.category = dto.category;
     if (dto.type !== undefined) data.type = dto.type;
-    if (dto.config !== undefined) data.config = encryptString(JSON.stringify(dto.config));
+    if (dto.config !== undefined) {
+      const existing = JSON.parse(decryptString(row.config)) as Record<string, unknown>;
+      const merged = mergeConfigPreservingSecrets(existing, dto.config);
+      const invalid = validateDataSourceConfig((dto.type ?? row.type) as DataSourceType, merged);
+      if (invalid) throw new BadRequestException(invalid);
+      data.config = encryptString(JSON.stringify(merged));
+    }
     const updated = await this.prisma.connector.update({ where: { id }, data });
     return this.serialize(updated);
   }

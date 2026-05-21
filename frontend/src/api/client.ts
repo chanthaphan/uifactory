@@ -16,8 +16,8 @@ http.interceptors.response.use(
 );
 
 // ---- shared types ----
-export type DataSourceType = 'REST' | 'POSTGRES' | 'SQLITE' | 'MSGRAPH';
-export type Role = 'admin' | 'member';
+export type DataSourceType = 'REST' | 'POSTGRES' | 'SQLITE' | 'MSGRAPH' | 'AGENT';
+export type Role = 'admin' | 'member' | 'viewer';
 export type AiProviderName = 'anthropic' | 'openai' | 'azure-openai';
 export type PageType = 'ui' | 'chat';
 export type Visibility = 'private' | 'org' | 'public';
@@ -113,9 +113,11 @@ export interface AppPage {
   prompt?: string;
   queryId?: string;
   sample?: string;
+  /** Data source ids this page may use. Empty/undefined = all app data sources (no restriction). */
+  dataSourceIds?: string[];
   layout?: CanvasLayout;
   editorMode?: EditorMode;
-  chat?: { systemPrompt?: string; queryId?: string; greeting?: string };
+  chat?: { systemPrompt?: string; queryId?: string; greeting?: string; agentDataSourceId?: string };
   actions?: { name: string; queryId: string }[];
 }
 export interface AppVersion {

@@ -1,7 +1,7 @@
 import { IsIn, IsObject, IsOptional, IsString, MinLength } from 'class-validator';
 import { DataSourceType } from '../../execution/execution.types';
 
-const TYPES: DataSourceType[] = ['REST', 'POSTGRES', 'SQLITE', 'MSGRAPH'];
+const TYPES: DataSourceType[] = ['REST', 'POSTGRES', 'SQLITE', 'MSGRAPH', 'AGENT'];
 
 export class CreateDataSourceDto {
   @IsString()

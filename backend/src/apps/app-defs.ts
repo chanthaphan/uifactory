@@ -41,12 +41,14 @@ export interface AppPage {
   prompt?: string;
   queryId?: string;
   sample?: string;
+  /** Data source ids this page may use. Empty/undefined = all app data sources (no restriction). */
+  dataSourceIds?: string[];
   /** Drag-and-drop component tree (when authored with the visual builder). */
   layout?: CanvasLayout;
   /** Remembers which editor the page was last authored in. */
   editorMode?: EditorMode;
   // chat pages
-  chat?: { systemPrompt?: string; queryId?: string; greeting?: string };
+  chat?: { systemPrompt?: string; queryId?: string; greeting?: string; agentDataSourceId?: string };
   // named queries the page's UI may invoke (interactive reads + write-back)
   actions?: { name: string; queryId: string }[];
 }
@@ -164,6 +166,17 @@ export function remapQueryIds(def: AppDefinition, map: Record<string, string>): 
       queryId: m(p.queryId),
       chat: p.chat ? { ...p.chat, queryId: m(p.chat.queryId) } : p.chat,
       actions: p.actions ? p.actions.map((a) => ({ ...a, queryId: m(a.queryId) as string })) : p.actions,
+    })),
+  };
+}
+
+/** Return a copy of the definition with each page's dataSourceIds remapped (unmapped ids dropped). */
+export function remapDataSourceIds(def: AppDefinition, map: Record<string, string>): AppDefinition {
+  return {
+    ...def,
+    pages: (def.pages || []).map((p) => ({
+      ...p,
+      dataSourceIds: p.dataSourceIds?.map((id) => map[id]).filter((x): x is string => !!x),
     })),
   };
 }

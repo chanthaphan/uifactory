@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
 import {
   Alert, Box, Button, Chip, CircularProgress, Divider, Drawer, FormControlLabel, IconButton, List,
   ListItemButton, ListItemIcon, ListItemText, MenuItem, Snackbar, Stack, Switch, TextField,
@@ -21,6 +21,8 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import HistoryIcon from '@mui/icons-material/History';
 import RestoreIcon from '@mui/icons-material/Restore';
+import UndoIcon from '@mui/icons-material/Undo';
+import RedoIcon from '@mui/icons-material/Redo';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -33,8 +35,10 @@ import ChatView from '../components/ChatView';
 import AiConnectionForm from '../components/AiConnectionForm';
 import ShareSettings, { ShareMember } from '../components/ShareSettings';
 import DataPanel from '../components/DataPanel';
-import CanvasBuilder from '../components/CanvasBuilder';
 import { compileLayout } from '../components/layout-compiler';
+
+// Drag-and-drop builder is editor-only; load it on demand to keep it out of the base chunk.
+const CanvasBuilder = lazy(() => import('../components/CanvasBuilder'));
 import StorageIcon from '@mui/icons-material/Storage';
 
 const rid = () => `page-${Math.random().toString(16).slice(2, 8)}`;
@@ -73,6 +77,13 @@ function fieldsOf(data: unknown): string[] {
   return first && typeof first === 'object' ? Object.keys(first as object) : [];
 }
 
+/** A query mutates data when its SQL isn't a SELECT/WITH/PRAGMA or its REST method isn't GET. */
+function isWriteQueryConfig(config: Record<string, unknown> | undefined): boolean {
+  const cfg = (config || {}) as { sql?: string; method?: string };
+  if (typeof cfg.sql === 'string') return !/^\s*(select|with|pragma)/i.test(cfg.sql);
+  return (cfg.method || 'GET').toUpperCase() !== 'GET';
+}
+
 // ---------------- UI page editor ----------------
 function UiPageEditor({ appId, page, brandColor, status, onGenerate, onPatch, dataVersion }: { appId: string; page: AppPage; brandColor?: string; status?: GenStatus; onGenerate: (pageId: string, opts: GenerateOpts) => void; onPatch: (p: Partial<AppPage>) => void; dataVersion: number }) {
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
@@ -90,6 +101,8 @@ function UiPageEditor({ appId, page, brandColor, status, onGenerate, onPatch, da
   const actions = page.actions || [];
   const [actionName, setActionName] = useState('');
   const [actionQuery, setActionQuery] = useState('');
+  const [actionResult, setActionResult] = useState<unknown>(null);
+  const [previewing, setPreviewing] = useState('');
 
   useEffect(() => {
     api.listDataSources(appId).then(setDataSources).catch(() => undefined);
@@ -100,6 +113,12 @@ function UiPageEditor({ appId, page, brandColor, status, onGenerate, onPatch, da
   const dataGuidance = boundQuery
     ? [boundQuery.config?.description, boundQuery.config?.schema].filter((x) => typeof x === 'string' && x).join('\n')
     : '';
+
+  // Per-page connector scope. Empty = all connectors available.
+  const scopeIds = page.dataSourceIds ?? [];
+  const scopedQueries = scopeIds.length === 0 ? queries : queries.filter((q) => scopeIds.includes(q.dataSourceId));
+  const boundOutOfScope = !!queryId && scopeIds.length > 0 && !scopedQueries.some((q) => q.id === queryId);
+  const outOfScopeActions = scopeIds.length === 0 ? [] : actions.filter((a) => !scopedQueries.some((q) => q.id === a.queryId));
 
   const runQuery = async () => {
     if (!queryId) return;
@@ -150,6 +169,14 @@ function UiPageEditor({ appId, page, brandColor, status, onGenerate, onPatch, da
     setActionQuery('');
   };
   const removeAction = (name: string) => onPatch({ actions: actions.filter((a) => a.name !== name) });
+  const previewAction = async (a: { name: string; queryId: string }) => {
+    const q = queries.find((x) => x.id === a.queryId);
+    if (isWriteQueryConfig(q?.config) && !window.confirm(`"${a.name}" runs a write query and will modify data in the connected system. Run it anyway?`)) return;
+    setPreviewing(a.name); setError(''); setActionResult(null);
+    try { const r = await api.appRunQuery(appId, { action: a.name, pageId: page.id }); setActionResult(r.data); }
+    catch (e) { setError(api.errMessage(e)); }
+    finally { setPreviewing(''); }
+  };
 
   const bridge: PreviewBridge = {
     runQuery: (qid, params) => api.appRunQuery(appId, { queryId: qid, pageId: page.id, params }),
@@ -174,9 +201,35 @@ function UiPageEditor({ appId, page, brandColor, status, onGenerate, onPatch, da
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
             <Stack spacing={1.5} sx={{ flex: 1 }}>
               <Typography variant="overline" color="primary">Data binding</Typography>
+              <TextField
+                select size="small"
+                label="Connectors available on this page"
+                value={scopeIds}
+                onChange={(e) => {
+                  const v = e.target.value as unknown as string[];
+                  onPatch({ dataSourceIds: v.length ? v : undefined });
+                }}
+                SelectProps={{
+                  multiple: true,
+                  renderValue: (selected) => {
+                    const ids = selected as string[];
+                    if (!ids.length) return 'All connectors';
+                    return dataSources.filter((d) => ids.includes(d.id)).map((d) => d.name).join(', ');
+                  },
+                }}
+                helperText={scopeIds.length === 0 ? 'Empty = all connectors available to this page' : `${scopeIds.length} connector(s) scoped to this page`}
+              >
+                {dataSources.map((d) => <MenuItem key={d.id} value={d.id}>{d.name} · {d.type}</MenuItem>)}
+              </TextField>
+              {boundOutOfScope && (
+                <Alert severity="warning" sx={{ py: 0 }}>The bound query uses a connector not scoped to this page. Add its connector above, or change the bound query.</Alert>
+              )}
+              {outOfScopeActions.length > 0 && (
+                <Alert severity="warning" sx={{ py: 0 }}>{outOfScopeActions.length} action(s) use a connector not scoped to this page and will be blocked at runtime.</Alert>
+              )}
               <TextField select size="small" label="Bound query (becomes window.APP_DATA)" value={queryId} onChange={(e) => setQueryId(e.target.value)}>
                 <MenuItem value="">(none — static UI)</MenuItem>
-                {queries.map((q) => {
+                {scopedQueries.map((q) => {
                   const ds = dataSources.find((d) => d.id === q.dataSourceId);
                   return <MenuItem key={q.id} value={q.id}>{q.name}{ds ? ` · ${ds.name}` : ''}</MenuItem>;
                 })}
@@ -199,14 +252,22 @@ function UiPageEditor({ appId, page, brandColor, status, onGenerate, onPatch, da
                 <Stack key={a.name} direction="row" alignItems="center" spacing={1}>
                   <Chip size="small" label={a.name} />
                   <Typography variant="caption" sx={{ flexGrow: 1 }}>{queries.find((q) => q.id === a.queryId)?.name || a.queryId}</Typography>
-                  <IconButton size="small" onClick={() => removeAction(a.name)}><DeleteOutlineIcon fontSize="small" /></IconButton>
+                  <IconButton size="small" title="Run & preview data" disabled={!!previewing} onClick={() => previewAction(a)}>
+                    {previewing === a.name ? <CircularProgress size={16} /> : <PlayArrowIcon fontSize="small" />}
+                  </IconButton>
+                  <IconButton size="small" title="Remove action" onClick={() => removeAction(a.name)}><DeleteOutlineIcon fontSize="small" /></IconButton>
                 </Stack>
               ))}
+              {actionResult != null && (
+                <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1, maxHeight: 220, overflow: 'auto' }}>
+                  <ResultView data={actionResult} />
+                </Box>
+              )}
               <Stack direction="row" spacing={1}>
                 <TextField size="small" label="Action name" value={actionName} onChange={(e) => setActionName(e.target.value)} sx={{ width: 140 }} />
                 <TextField select size="small" label="Query" value={actionQuery} onChange={(e) => setActionQuery(e.target.value)} fullWidth>
                   <MenuItem value="">Select…</MenuItem>
-                  {queries.map((q) => <MenuItem key={q.id} value={q.id}>{q.name}</MenuItem>)}
+                  {scopedQueries.map((q) => <MenuItem key={q.id} value={q.id}>{q.name}</MenuItem>)}
                 </TextField>
                 <IconButton onClick={addAction} disabled={!actionName.trim() || !actionQuery}><AddIcon /></IconButton>
               </Stack>
@@ -225,12 +286,14 @@ function UiPageEditor({ appId, page, brandColor, status, onGenerate, onPatch, da
 
       <Box sx={{ flexGrow: 1, minHeight: 420 }}>
         {view === 'canvas' && (
-          <CanvasBuilder
-            layout={page.layout || { components: [] }}
-            onChange={onLayoutChange}
-            actions={actions}
-            fieldOptions={fieldsOf(result)}
-          />
+          <Suspense fallback={<Box sx={{ display: 'grid', placeItems: 'center', py: 8 }}><CircularProgress /></Box>}>
+            <CanvasBuilder
+              layout={page.layout || { components: [] }}
+              onChange={onLayoutChange}
+              actions={actions}
+              fieldOptions={fieldsOf(result)}
+            />
+          </Suspense>
         )}
 
         {view === 'ai' && (
@@ -304,18 +367,35 @@ function UiPageEditor({ appId, page, brandColor, status, onGenerate, onPatch, da
 }
 
 // ---------------- chat page editor ----------------
-const AI_MODE_LABEL: Record<AppAiConfig['mode'], string> = {
-  platform: 'Platform LLM (server default)',
-  provider: "This app's own LLM key",
-  'agent-api': 'External conversation AI (your API)',
-};
 function ChatPageEditor({ page, appId, saved, aiMode, onOpenSettings, onPatch, dataVersion }: { page: AppPage; appId: string; saved: boolean; aiMode: AppAiConfig['mode']; onOpenSettings: () => void; onPatch: (p: Partial<AppPage>) => void; dataVersion: number }) {
   const [queries, setQueries] = useState<QueryDef[]>([]);
+  const [dataSources, setDataSources] = useState<DataSource[]>([]);
+  const [groundResult, setGroundResult] = useState<unknown>(null);
+  const [groundLoading, setGroundLoading] = useState(false);
+  const [groundError, setGroundError] = useState('');
   const chat = page.chat || {};
   useEffect(() => {
     api.listQueries(appId).then(setQueries).catch(() => undefined);
+    api.listDataSources(appId).then(setDataSources).catch(() => undefined);
   }, [appId, dataVersion]);
   const patchChat = (p: Partial<NonNullable<AppPage['chat']>>) => onPatch({ chat: { ...chat, ...p } });
+  const previewGround = async () => {
+    if (!chat.queryId) return;
+    const q = queries.find((x) => x.id === chat.queryId);
+    if (isWriteQueryConfig(q?.config) && !window.confirm('This grounding query runs a write query and will modify data in the connected system. Run it anyway?')) return;
+    setGroundLoading(true); setGroundError(''); setGroundResult(null);
+    try { const r = await api.appRunQuery(appId, { queryId: chat.queryId, pageId: page.id }); setGroundResult(r.data); }
+    catch (e) { setGroundError(api.errMessage(e)); }
+    finally { setGroundLoading(false); }
+  };
+  const agentSources = dataSources.filter((d) => d.type === 'AGENT');
+  const selectedAgent = agentSources.find((d) => d.id === chat.agentDataSourceId);
+
+  // Per-page connector scope (governs the grounding query). Empty = all connectors available.
+  const scopeIds = page.dataSourceIds ?? [];
+  const scopableSources = dataSources.filter((d) => d.type !== 'AGENT');
+  const scopedQueries = scopeIds.length === 0 ? queries : queries.filter((q) => scopeIds.includes(q.dataSourceId));
+  const groundingOutOfScope = !!chat.queryId && scopeIds.length > 0 && !scopedQueries.some((q) => q.id === chat.queryId);
 
   return (
     <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ height: '100%' }}>
@@ -324,20 +404,68 @@ function ChatPageEditor({ page, appId, saved, aiMode, onOpenSettings, onPatch, d
           <Typography variant="overline" color="primary">Chat configuration</Typography>
           <TextField label="System prompt" value={chat.systemPrompt || ''} onChange={(e) => patchChat({ systemPrompt: e.target.value })} multiline minRows={3} size="small" placeholder="You are a helpful assistant for…" />
           <TextField label="Greeting" value={chat.greeting || ''} onChange={(e) => patchChat({ greeting: e.target.value })} size="small" placeholder="Hi! How can I help?" />
-          <TextField select size="small" label="Ground answers on query (optional)" value={chat.queryId || ''} onChange={(e) => patchChat({ queryId: e.target.value || undefined })}>
-            <MenuItem value="">(no data grounding)</MenuItem>
-            {queries.map((q) => <MenuItem key={q.id} value={q.id}>{q.name}</MenuItem>)}
+          <TextField
+            select size="small"
+            label="Connectors available on this page"
+            value={scopeIds}
+            onChange={(e) => {
+              const v = e.target.value as unknown as string[];
+              onPatch({ dataSourceIds: v.length ? v : undefined });
+            }}
+            SelectProps={{
+              multiple: true,
+              renderValue: (selected) => {
+                const ids = selected as string[];
+                if (!ids.length) return 'All connectors';
+                return scopableSources.filter((d) => ids.includes(d.id)).map((d) => d.name).join(', ');
+              },
+            }}
+            helperText={scopeIds.length === 0 ? 'Empty = all connectors available to this page' : `${scopeIds.length} connector(s) scoped to this page`}
+          >
+            {scopableSources.map((d) => <MenuItem key={d.id} value={d.id}>{d.name} · {d.type}</MenuItem>)}
           </TextField>
+          <Stack direction="row" spacing={1} alignItems="flex-start">
+            <TextField select size="small" fullWidth label="Ground answers on query (optional)" value={chat.queryId || ''} onChange={(e) => patchChat({ queryId: e.target.value || undefined })}>
+              <MenuItem value="">(no data grounding)</MenuItem>
+              {scopedQueries.map((q) => <MenuItem key={q.id} value={q.id}>{q.name}</MenuItem>)}
+            </TextField>
+            <IconButton size="small" title="Run & preview data" disabled={!chat.queryId || groundLoading} onClick={previewGround} sx={{ mt: 0.5 }}>
+              {groundLoading ? <CircularProgress size={16} /> : <PlayArrowIcon fontSize="small" />}
+            </IconButton>
+          </Stack>
+          {groundingOutOfScope && (
+            <Alert severity="warning" sx={{ py: 0 }}>The grounding query uses a connector not scoped to this page; it will be skipped at runtime.</Alert>
+          )}
+          {groundError && <Alert severity="error" sx={{ py: 0 }} onClose={() => setGroundError('')}>{groundError}</Alert>}
+          {groundResult != null && (
+            <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1, maxHeight: 220, overflow: 'auto' }}>
+              <ResultView data={groundResult} />
+            </Box>
+          )}
           <Divider />
           <Typography variant="overline">Responder</Typography>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Chip size="small" color={aiMode === 'agent-api' ? 'secondary' : 'default'} label={AI_MODE_LABEL[aiMode]} />
-          </Stack>
-          <Typography variant="caption" color="text.secondary">
-            Point this chat at a raw LLM or an <strong>external conversation AI API</strong> (your own assistant endpoint). UIFactory POSTs the
-            transcript, latest <code>message</code>, and a stable <code>conversationId</code> so a stateful assistant can keep the thread.
-          </Typography>
-          <Button size="small" startIcon={<SettingsIcon />} onClick={onOpenSettings}>Change AI / agent connection</Button>
+          <TextField
+            select size="small"
+            label="Agent API (optional)"
+            value={chat.agentDataSourceId || ''}
+            onChange={(e) => patchChat({ agentDataSourceId: e.target.value || undefined })}
+            helperText={
+              chat.agentDataSourceId && selectedAgent
+                ? `Using "${selectedAgent.name}" — overrides the app-level AI setting for this page`
+                : agentSources.length === 0
+                  ? 'No Agent API connectors yet — add one in Connectors'
+                  : 'Select an Agent API connector to route this page\'s chat to your own endpoint'
+            }
+          >
+            <MenuItem value="">(use app-level AI setting)</MenuItem>
+            {agentSources.map((d) => <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>)}
+          </TextField>
+          {!chat.agentDataSourceId && (
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Chip size="small" label={aiMode === 'agent-api' ? 'External agent API (app setting)' : aiMode === 'provider' ? "App's own LLM key" : 'Platform LLM'} />
+              <Button size="small" startIcon={<SettingsIcon />} onClick={onOpenSettings} sx={{ ml: 'auto' }}>Change</Button>
+            </Stack>
+          )}
           {!saved && <Alert severity="info">Save the app to test the chat with your latest changes.</Alert>}
         </Stack>
       </Box>
@@ -375,6 +503,42 @@ export default function AppEditorPage() {
   const [versions, setVersions] = useState<AppVersion[]>([]);
   const [publishNote, setPublishNote] = useState('');
   const [genStatus, setGenStatus] = useState<Record<string, GenStatus>>({});
+  // Undo/redo history of the definition (current-session edits, before/after save).
+  const [undoStack, setUndoStack] = useState<AppDefinition[]>([]);
+  const [redoStack, setRedoStack] = useState<AppDefinition[]>([]);
+  const [epoch, setEpoch] = useState(0); // bumped on undo/redo to remount the page editor
+  const defRef = useRef(def);
+  useEffect(() => { defRef.current = def; }, [def]);
+  const HISTORY_LIMIT = 100;
+
+  /** Apply a definition change and record the previous state for undo. */
+  const mutateDef = (updater: (d: AppDefinition) => AppDefinition) => {
+    setUndoStack((s) => [...s, defRef.current].slice(-HISTORY_LIMIT));
+    setRedoStack([]);
+    setDef(updater);
+    setDirty(true);
+  };
+  const fixSelection = (d: AppDefinition) => setSelectedId((sel) => (d.pages.some((p) => p.id === sel) ? sel : d.pages[0]?.id || ''));
+  const undo = () => {
+    if (!undoStack.length) return;
+    const prev = undoStack[undoStack.length - 1];
+    setUndoStack((s) => s.slice(0, -1));
+    setRedoStack((r) => [...r, defRef.current].slice(-HISTORY_LIMIT));
+    setDef(prev);
+    fixSelection(prev);
+    setEpoch((e) => e + 1);
+    setDirty(true);
+  };
+  const redo = () => {
+    if (!redoStack.length) return;
+    const next = redoStack[redoStack.length - 1];
+    setRedoStack((r) => r.slice(0, -1));
+    setUndoStack((s) => [...s, defRef.current].slice(-HISTORY_LIMIT));
+    setDef(next);
+    fixSelection(next);
+    setEpoch((e) => e + 1);
+    setDirty(true);
+  };
 
   const load = async () => {
     const a = await api.getApp(id);
@@ -385,6 +549,8 @@ export default function AppEditorPage() {
     setAiConfig(a.aiConfig || { mode: 'platform' });
     setSharing({ visibility: a.visibility, members: (a.members || []).filter((m) => m.role !== 'owner') as ShareMember[] });
     setSelectedId(a.definition.pages[0]?.id || '');
+    setUndoStack([]);
+    setRedoStack([]);
   };
   useEffect(() => {
     load().catch(() => navigate('/build'));
@@ -393,8 +559,7 @@ export default function AppEditorPage() {
   const selected = useMemo(() => def.pages.find((p) => p.id === selectedId), [def, selectedId]);
 
   const patchPage = (pageId: string, patch: Partial<AppPage>) => {
-    setDef((d) => ({ ...d, pages: d.pages.map((p) => (p.id === pageId ? { ...p, ...patch } : p)) }));
-    setDirty(true);
+    mutateDef((d) => ({ ...d, pages: d.pages.map((p) => (p.id === pageId ? { ...p, ...patch } : p)) }));
   };
 
   // Generation runs at the app level so its status survives navigating between pages.
@@ -428,18 +593,13 @@ export default function AppEditorPage() {
   const addPage = (type: 'ui' | 'chat') => {
     const n = def.pages.length + 1;
     const page: AppPage = { id: rid(), name: type === 'chat' ? `Chat ${n}` : `Page ${n}`, slug: `page-${n}`, type, ...(type === 'chat' ? { chat: { greeting: 'Hi! How can I help?' } } : {}) };
-    setDef((d) => ({ ...d, pages: [...d.pages, page] }));
+    mutateDef((d) => ({ ...d, pages: [...d.pages, page] }));
     setSelectedId(page.id);
-    setDirty(true);
   };
 
   const deletePage = (pageId: string) => {
-    setDef((d) => {
-      const pages = d.pages.filter((p) => p.id !== pageId);
-      if (selectedId === pageId) setSelectedId(pages[0]?.id || '');
-      return { ...d, pages };
-    });
-    setDirty(true);
+    mutateDef((d) => ({ ...d, pages: d.pages.filter((p) => p.id !== pageId) }));
+    if (selectedId === pageId) setSelectedId((def.pages.filter((p) => p.id !== pageId)[0]?.id) || '');
   };
 
   const save = async () => {
@@ -494,6 +654,8 @@ export default function AppEditorPage() {
       setApp(updated);
       setDef(updated.definition);
       setSelectedId(updated.definition.pages[0]?.id || '');
+      setUndoStack([]);
+      setRedoStack([]);
       setDirty(false);
       setToast(`Restored v${version} into the draft`);
       setVersionsOpen(false);
@@ -513,7 +675,9 @@ export default function AppEditorPage() {
         {app.status === 'deployed' && <Chip size="small" variant="outlined" label={`v${app.version}`} />}
         <Box flexGrow={1} />
         {dirty && <Chip size="small" color="warning" label="Unsaved" />}
-        <Button startIcon={<StorageIcon />} onClick={() => setDataOpen(true)}>Data</Button>
+        <Tooltip title="Undo"><span><IconButton size="small" onClick={undo} disabled={!undoStack.length}><UndoIcon fontSize="small" /></IconButton></span></Tooltip>
+        <Tooltip title="Redo"><span><IconButton size="small" onClick={redo} disabled={!redoStack.length}><RedoIcon fontSize="small" /></IconButton></span></Tooltip>
+        <Button startIcon={<StorageIcon />} onClick={() => setDataOpen(true)}>Connectors</Button>
         <Button startIcon={<HistoryIcon />} onClick={openVersions}>Versions</Button>
         <Button startIcon={<SettingsIcon />} onClick={() => setSettingsOpen(true)}>Settings</Button>
         <Button variant="outlined" startIcon={<SaveIcon />} onClick={save} disabled={saving}>Save</Button>
@@ -562,7 +726,7 @@ export default function AppEditorPage() {
 
         <Box sx={{ flexGrow: 1, minHeight: 480 }}>
           {selected ? (
-            <Box key={selected.id} sx={{ height: '100%' }}>
+            <Box key={`${selected.id}-${epoch}`} sx={{ height: '100%' }}>
               <TextField size="small" label="Page name" value={selected.name} onChange={(e) => patchPage(selected.id, { name: e.target.value })} sx={{ mb: 2 }} />
               {selected.type === 'ui' ? (
                 <UiPageEditor appId={id} page={selected} brandColor={(def.theme as { brandColor?: string } | undefined)?.brandColor} status={genStatus[selected.id]} onGenerate={runGenerate} onPatch={(p) => patchPage(selected.id, p)} dataVersion={dataVersion} />
@@ -589,7 +753,7 @@ export default function AppEditorPage() {
               <Typography variant="subtitle2" gutterBottom>Branding</Typography>
               {(() => {
                 const theme = (def.theme || {}) as { brandName?: string; brandColor?: string; logo?: string };
-                const setTheme = (patch: Record<string, unknown>) => { setDef({ ...def, theme: { ...theme, ...patch } }); setDirty(true); };
+                const setTheme = (patch: Record<string, unknown>) => { mutateDef((d) => ({ ...d, theme: { ...((d.theme || {}) as Record<string, unknown>), ...patch } })); };
                 return (
                   <Stack spacing={1.5}>
                     <TextField size="small" label="Brand name" value={theme.brandName || ''} onChange={(e) => setTheme({ brandName: e.target.value })} placeholder={name} />
@@ -612,7 +776,7 @@ export default function AppEditorPage() {
                 fullWidth multiline minRows={4} size="small"
                 placeholder={'AGENTS.md / CLAUDE.md style. e.g.\n- Use our brand color for headers\n- Prefer tables with sticky headers\n- All money uses 2 decimals and a $ prefix'}
                 value={(def.buildGuidelines as string) || ''}
-                onChange={(e) => { setDef({ ...def, buildGuidelines: e.target.value }); setDirty(true); }}
+                onChange={(e) => { const v = e.target.value; mutateDef((d) => ({ ...d, buildGuidelines: v })); }}
               />
               <Typography variant="caption" color="text.secondary">
                 Conventions fed to the AI/agent for both UI generation and chat. When the AI connection is an
@@ -625,7 +789,7 @@ export default function AppEditorPage() {
                 control={
                   <Switch
                     checked={def.allowWriteActions !== false}
-                    onChange={(e) => { setDef({ ...def, allowWriteActions: e.target.checked }); setDirty(true); }}
+                    onChange={(e) => { const v = e.target.checked; mutateDef((d) => ({ ...d, allowWriteActions: v })); }}
                   />
                 }
                 label="Allow non-editors to run write actions (forms / create / update / delete)"

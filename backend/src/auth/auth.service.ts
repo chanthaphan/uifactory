@@ -98,7 +98,9 @@ export class AuthService {
     }
 
     const userCount = await this.prisma.user.count();
-    const role: Role = userCount === 0 || adminEmails.includes(email) ? 'admin' : 'member';
+    // First user / configured admins bootstrap as admin; everyone else starts as a viewer.
+    // An admin promotes a viewer to "member" (builder) to grant access to the Build tools.
+    const role: Role = userCount === 0 || adminEmails.includes(email) ? 'admin' : 'viewer';
     const created = await this.prisma.user.create({
       data: { email, name: profile.name || email, oid: profile.oid, avatarUrl: profile.avatarUrl, role },
     });

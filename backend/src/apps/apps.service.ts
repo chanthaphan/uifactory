@@ -21,10 +21,12 @@ import {
   parseAiConfig,
   parseTemplate,
   redactAiConfig,
+  remapDataSourceIds,
   remapQueryIds,
   slugify,
 } from './app-defs';
 import { decryptString, encryptString } from '../common/crypto.util';
+import { dataSourceInScope, isMutationConfig } from '../common/query-config.util';
 
 type AppWith = Prisma.AppGetPayload<{ include: { owner: true; memberships: true } }>;
 
@@ -75,6 +77,24 @@ export class AppsService {
   /** Decrypt + parse an app's stored AI config. */
   private aiConfigOf(app: AppWith): AppAiConfig {
     return parseAiConfig(app.aiConfig ? decryptString(app.aiConfig) : null);
+  }
+
+  /** Build an agent-api config from a per-page AGENT datasource, or fall back to the app-level config. */
+  private async resolvePageAiConfig(app: AppWith, page: AppDefinition['pages'][number] | undefined): Promise<AppAiConfig> {
+    const dsId = page?.chat?.agentDataSourceId;
+    if (!dsId) return this.aiConfigOf(app);
+    const row = await this.prisma.dataSource.findUnique({ where: { id: dsId } });
+    if (!row || row.type !== 'AGENT') return this.aiConfigOf(app);
+    const cfg = JSON.parse(decryptString(row.config)) as Record<string, unknown>;
+    return {
+      mode: 'agent-api',
+      agent: {
+        url: cfg.url as string,
+        ...(cfg.apiKey ? { apiKey: cfg.apiKey as string } : {}),
+        ...(cfg.authHeader ? { authHeader: cfg.authHeader as string } : {}),
+        ...(cfg.extraHeaders ? { extraHeaders: cfg.extraHeaders as Record<string, string> } : {}),
+      },
+    };
   }
 
   /** The definition to run: published snapshot for runners, draft for editors. */
@@ -220,7 +240,7 @@ export class AppsService {
         });
         qRefMap[q.ref] = created.id;
       }
-      const finalDef = remapQueryIds(bundle.definition, qRefMap);
+      const finalDef = remapDataSourceIds(remapQueryIds(bundle.definition, qRefMap), dsRefMap);
       await this.prisma.app.update({ where: { id: app.id }, data: { definition: JSON.stringify(finalDef) } });
     }
 
@@ -366,6 +386,13 @@ export class AppsService {
     return new Set(ids.filter((x): x is string => !!x));
   }
 
+  /** True when the query's data source is allowed on this page (empty/undefined scope = all allowed). */
+  private async queryInPageScope(page: AppDefinition['pages'][number], queryId: string): Promise<boolean> {
+    if (!page.dataSourceIds || page.dataSourceIds.length === 0) return true;
+    const q = await this.prisma.query.findUnique({ where: { id: queryId }, select: { dataSourceId: true } });
+    return dataSourceInScope(page.dataSourceIds, q?.dataSourceId);
+  }
+
   async pageData(id: string, pageId: string, user?: AuthUser) {
     const app = await this.getOrThrow(id);
     this.assertRunnable(app, user);
@@ -374,6 +401,7 @@ export class AppsService {
     if (!page) throw new NotFoundException('Page not found');
     const queryId = page.queryId || page.chat?.queryId;
     if (!queryId) return { data: null };
+    if (!(await this.queryInPageScope(page, queryId))) return { data: null };
     const result = await this.queries.run(queryId, undefined, user?.id, buildIdentity(user));
     return { data: result.data, meta: result.meta };
   }
@@ -406,6 +434,9 @@ export class AppsService {
     if (!allowed.has(queryId)) {
       throw new ForbiddenException(page ? 'This query is not available on this page' : 'This query is not part of the app');
     }
+    if (page && !(await this.queryInPageScope(page, queryId))) {
+      throw new ForbiddenException('This connector is not available on this page');
+    }
     // Per-app guard: non-editors may run write (mutation) actions only when allowed.
     if (def.allowWriteActions === false && !this.canEdit(app, user) && (await this.isMutationQuery(queryId))) {
       throw new ForbiddenException('You are not allowed to run write actions on this app');
@@ -418,9 +449,7 @@ export class AppsService {
   private async isMutationQuery(queryId: string): Promise<boolean> {
     const q = await this.prisma.query.findUnique({ where: { id: queryId } });
     if (!q) return false;
-    const cfg = JSON.parse(q.config) as { sql?: string; method?: string };
-    if (typeof cfg.sql === 'string') return !/^\s*(select|with|pragma)/i.test(cfg.sql);
-    return (cfg.method || 'GET').toUpperCase() !== 'GET';
+    return isMutationConfig(JSON.parse(q.config) as { sql?: string; method?: string });
   }
 
   /** Compose the chat system prompt + grounding data for a page (shared by chat + chatStream). */
@@ -433,14 +462,14 @@ export class AppsService {
     }
     let contextData: unknown;
     const queryId = page?.chat?.queryId;
-    if (queryId) {
+    if (queryId && page && (await this.queryInPageScope(page, queryId))) {
       try {
         contextData = (await this.queries.run(queryId, undefined, user?.id, buildIdentity(user))).data;
       } catch {
         contextData = undefined;
       }
     }
-    return { system, contextData };
+    return { system, contextData, page };
   }
 
   private lastUserMessage(messages: ChatMessage[]): string {
@@ -459,11 +488,12 @@ export class AppsService {
     this.assertRunnable(app, user);
     this.assertRate(this.chatLimiter, user?.id ?? 'anon', 'chat');
     this.assertChatInputWithinLimit(messages);
-    const { system, contextData } = await this.chatContext(app, pageId, user);
+    const { system, contextData, page } = await this.chatContext(app, pageId, user);
+    const aiConfig = await this.resolvePageAiConfig(app, page);
     const doPersist = Boolean(persist && user);
     let convId = conversationId;
     if (doPersist) convId = await this.conversations.ensure(app.id, pageId, user!.id, conversationId, this.lastUserMessage(messages));
-    const result = await this.agent.chat(this.aiConfigOf(app), system, messages, contextData, convId ?? conversationId, buildIdentity(user));
+    const result = await this.agent.chat(aiConfig, system, messages, contextData, convId ?? conversationId, buildIdentity(user));
     if (doPersist && convId) await this.conversations.appendTurn(convId, this.lastUserMessage(messages), result.reply);
     return { ...result, conversationId: doPersist ? convId : undefined };
   }
@@ -482,13 +512,14 @@ export class AppsService {
     this.assertRunnable(app, user);
     this.assertRate(this.chatLimiter, user?.id ?? 'anon', 'chat');
     this.assertChatInputWithinLimit(messages);
-    const { system, contextData } = await this.chatContext(app, pageId, user);
+    const { system, contextData, page } = await this.chatContext(app, pageId, user);
+    const aiConfig = await this.resolvePageAiConfig(app, page);
     const doPersist = Boolean(persist && user);
     let convId = conversationId;
     if (doPersist) convId = await this.conversations.ensure(app.id, pageId, user!.id, conversationId, this.lastUserMessage(messages));
     let full = '';
     const source = await this.agent.chatStream(
-      this.aiConfigOf(app),
+      aiConfig,
       system,
       messages,
       (d) => { full += d; onDelta(d); },

@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
 import { api, AuthConfig, AuthUser } from '../api/client';
+import { applyDocumentBranding } from '../branding';
 
 interface AuthState {
   user: AuthUser | null;
@@ -8,6 +9,8 @@ interface AuthState {
   refresh: () => Promise<void>;
   logout: () => Promise<void>;
   isAdmin: boolean;
+  /** Builders (admin or member) may create/edit apps and see the Build tab; viewers cannot. */
+  canBuild: boolean;
 }
 
 const AuthCtx = createContext<AuthState | undefined>(undefined);
@@ -36,6 +39,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refresh();
   }, [refresh]);
 
+  // Reflect the configured platform name + logo in the browser tab (title + favicon).
+  useEffect(() => {
+    if (config) applyDocumentBranding(config.platformName, config.platformLogo, config.platformBrandColor);
+  }, [config]);
+
   // The API client emits this when a request returns 401 (expired session).
   useEffect(() => {
     const onUnauthorized = () => setUser(null);
@@ -44,7 +52,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<AuthState>(
-    () => ({ user, config, loading, refresh, logout, isAdmin: user?.role === 'admin' }),
+    () => ({
+      user,
+      config,
+      loading,
+      refresh,
+      logout,
+      isAdmin: user?.role === 'admin',
+      canBuild: user?.role === 'admin' || user?.role === 'member',
+    }),
     [user, config, loading, refresh, logout],
   );
 

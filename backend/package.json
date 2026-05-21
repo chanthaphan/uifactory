@@ -5,12 +5,14 @@
   "description": "UIFactory backend - NestJS API for data sources, queries, apps and AI UI generation.",
   "scripts": {
     "build": "nest build",
+    "test": "node --import tsx --test test/*.test.ts",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main.js",
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push --skip-generate",
     "seed": "ts-node scripts/seed.ts",
+    "migrate:agent-connectors": "ts-node scripts/migrate-agent-connectors.ts",
     "setup": "prisma generate && prisma db push --skip-generate && ts-node scripts/seed.ts"
   },
   "dependencies": {
@@ -29,7 +31,8 @@
     "openai": "^6.38.0",
     "pg": "^8.13.1",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.0",
@@ -42,6 +45,7 @@
     "prisma": "^6.2.1",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
+    "tsx": "^4.22.3",
     "typescript": "^5.7.3"
   }
 }

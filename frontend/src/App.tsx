@@ -1,4 +1,4 @@
-import { useState, MouseEvent } from 'react';
+import { useState, MouseEvent, lazy, Suspense } from 'react';
 import {
   AppBar, Avatar, Box, Button, CircularProgress, Container, Divider, ListItemIcon,
   Menu, MenuItem, Stack, Toolbar, Typography,
@@ -11,20 +11,30 @@ import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import BrandLogo from './components/BrandLogo';
 import LoginPage from './pages/LoginPage';
-import CatalogPage from './pages/CatalogPage';
-import MyAppsPage from './pages/MyAppsPage';
-import AppEditorPage from './pages/AppEditorPage';
-import AdminPage from './pages/AdminPage';
-import AppRunnerPage from './pages/AppRunnerPage';
+
+// Route-level code-splitting: heavy pages load on demand to shrink the initial bundle.
+const CatalogPage = lazy(() => import('./pages/CatalogPage'));
+const MyAppsPage = lazy(() => import('./pages/MyAppsPage'));
+const AppEditorPage = lazy(() => import('./pages/AppEditorPage'));
+const AdminPage = lazy(() => import('./pages/AdminPage'));
+const AppRunnerPage = lazy(() => import('./pages/AppRunnerPage'));
+
+function PageLoader() {
+  return (
+    <Box sx={{ display: 'grid', placeItems: 'center', py: 8 }}>
+      <CircularProgress />
+    </Box>
+  );
+}
 
 function NavBar() {
-  const { user, config, logout, isAdmin } = useAuth();
+  const { user, config, logout, isAdmin, canBuild } = useAuth();
   const location = useLocation();
   const [anchor, setAnchor] = useState<null | HTMLElement>(null);
 
   const nav = [
     { to: '/', label: 'Catalog', icon: <AppsIcon fontSize="small" /> },
-    { to: '/build', label: 'Build', icon: <BuildIcon fontSize="small" /> },
+    ...(canBuild ? [{ to: '/build', label: 'Build', icon: <BuildIcon fontSize="small" /> }] : []),
     ...(isAdmin ? [{ to: '/admin', label: 'Admin', icon: <AdminPanelSettingsIcon fontSize="small" /> }] : []),
   ];
   const active = (to: string) => (to === '/' ? location.pathname === '/' : location.pathname.startsWith(to));
@@ -65,18 +75,20 @@ function NavBar() {
 }
 
 function Shell() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, canBuild } = useAuth();
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
       <NavBar />
       <Container maxWidth="xl" sx={{ py: 3 }}>
-        <Routes>
-          <Route path="/" element={<CatalogPage />} />
-          <Route path="/build" element={<MyAppsPage />} />
-          <Route path="/build/:id" element={<AppEditorPage />} />
-          <Route path="/admin" element={isAdmin ? <AdminPage /> : <Navigate to="/" replace />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <Suspense fallback={<PageLoader />}>
+          <Routes>
+            <Route path="/" element={<CatalogPage />} />
+            <Route path="/build" element={canBuild ? <MyAppsPage /> : <Navigate to="/" replace />} />
+            <Route path="/build/:id" element={canBuild ? <AppEditorPage /> : <Navigate to="/" replace />} />
+            <Route path="/admin" element={isAdmin ? <AdminPage /> : <Navigate to="/" replace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
       </Container>
     </Box>
   );
@@ -93,10 +105,12 @@ function Gate() {
   }
   if (!user) return <LoginPage />;
   return (
-    <Routes>
-      <Route path="/run/:slug" element={<AppRunnerPage />} />
-      <Route path="*" element={<Shell />} />
-    </Routes>
+    <Suspense fallback={<PageLoader />}>
+      <Routes>
+        <Route path="/run/:slug" element={<AppRunnerPage />} />
+        <Route path="*" element={<Shell />} />
+      </Routes>
+    </Suspense>
   );
 }
 
