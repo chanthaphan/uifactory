@@ -7,8 +7,9 @@ COPY backend/package*.json backend/
 COPY frontend/package*.json frontend/
 RUN npm ci
 COPY . .
-RUN npm run build --workspace backend \
- && npx prisma generate --schema backend/prisma/schema.prisma
+# Generate the Prisma client BEFORE building: nest build typechecks against the generated client.
+RUN npx prisma generate --schema backend/prisma/schema.prisma \
+ && npm run build --workspace backend
 
 FROM node:22-alpine AS runtime
 WORKDIR /app
