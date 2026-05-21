@@ -32,7 +32,9 @@ INTERACTIVITY (use only when the request needs it):
   - \`await UIFactory.refresh()\` -> re-runs the page's primary query; the result is also pushed to any onData handler.
   - \`UIFactory.onData(cb)\` -> cb(data) fires with the latest data (and immediately with the initial window.APP_DATA).
   - \`UIFactory.navigate(slug)\` -> open another page of the app.
-- Forms that create/update/delete should call \`UIFactory.runAction(...)\` then \`UIFactory.refresh()\`.`;
+  - \`await UIFactory.readFile(fileOrInput)\` -> read a user-selected file; resolves to { name, type, size, dataUrl, text } (text only for text-like files). Use it to build "browse a file then submit it to an action" flows.
+- Forms that create/update/delete should call \`UIFactory.runAction(...)\` then \`UIFactory.refresh()\`.
+- For file uploads: render an \`<input type="file">\`, call \`UIFactory.readFile(input.files[0])\`, then pass the result (e.g. { filename, contentBase64 } from dataUrl, or text) to \`UIFactory.runAction(...)\`.`;
 
 @Injectable()
 export class AiService {
@@ -64,11 +66,15 @@ export class AiService {
     }
 
     const refine = dto.currentHtml && dto.currentHtml.trim().length > 0;
+    const guidance = dto.dataGuidance?.trim()
+      ? ['', 'Data / API guidance (how to interpret and use this data):', dto.dataGuidance.trim()]
+      : [];
     const userContent = (
       refine
         ? [
             `Apply this change to the existing app page and return the COMPLETE updated HTML document: ${dto.prompt}`,
             dto.queryName ? `Data label: ${dto.queryName}` : '',
+            ...guidance,
             '',
             'Current HTML:',
             '```html',
@@ -83,6 +89,7 @@ export class AiService {
         : [
             `User request: ${dto.prompt}`,
             dto.queryName ? `Data label: ${dto.queryName}` : '',
+            ...guidance,
             '',
             'Here is a sample of the data. window.APP_DATA will have this exact shape at runtime:',
             '```json',

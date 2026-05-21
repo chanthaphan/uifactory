@@ -9,14 +9,26 @@ interface Props {
   greeting?: string;
 }
 
+function makeConversationId(): string {
+  try {
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
+  } catch {
+    /* fall through */
+  }
+  return `conv-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
 export default function ChatView({ appId, pageId, greeting }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [conversationId, setConversationId] = useState(makeConversationId);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setMessages(greeting ? [{ role: 'assistant', content: greeting }] : []);
+    // Start a fresh conversation when the page/app changes so external conversation APIs get a new thread.
+    setConversationId(makeConversationId());
   }, [greeting, appId, pageId]);
 
   useEffect(() => {
@@ -31,7 +43,7 @@ export default function ChatView({ appId, pageId, greeting }: Props) {
     setInput('');
     setBusy(true);
     try {
-      const res = await api.chat(appId, { pageId, messages: next.filter((m) => m.role !== 'system') });
+      const res = await api.chat(appId, { pageId, conversationId, messages: next.filter((m) => m.role !== 'system') });
       setMessages([...next, { role: 'assistant', content: res.reply }]);
     } catch (e) {
       setMessages([...next, { role: 'assistant', content: `Error: ${api.errMessage(e)}` }]);

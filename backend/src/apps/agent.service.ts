@@ -32,11 +32,11 @@ export class AgentService {
   private readonly logger = new Logger(AgentService.name);
 
   /** Run a chat turn using the app's AI/agent connection (or the platform default, or a mock). */
-  async chat(cfg: AppAiConfig, system: string, messages: ChatMessage[], contextData?: unknown): Promise<ChatResult> {
+  async chat(cfg: AppAiConfig, system: string, messages: ChatMessage[], contextData?: unknown, conversationId?: string): Promise<ChatResult> {
     const grounded = this.withContext(system, contextData);
 
     if (cfg.mode === 'agent-api' && cfg.agent?.url) {
-      return { reply: await this.callAgentApi(cfg, grounded, messages, contextData), source: 'agent-api' };
+      return { reply: await this.callAgentApi(cfg, grounded, messages, contextData, conversationId), source: 'agent-api' };
     }
 
     const spec = this.resolveProviderSpec(cfg);
@@ -132,7 +132,7 @@ export class AgentService {
     return res.choices[0]?.message?.content ?? '';
   }
 
-  private async callAgentApi(cfg: AppAiConfig, system: string, messages: ChatMessage[], contextData?: unknown): Promise<string> {
+  private async callAgentApi(cfg: AppAiConfig, system: string, messages: ChatMessage[], contextData?: unknown, conversationId?: string): Promise<string> {
     const agent = cfg.agent!;
     await assertSafeUrl(agent.url); // SSRF guard: external agent endpoint is user-supplied
     const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(agent.extraHeaders || {}) };
@@ -140,9 +140,17 @@ export class AgentService {
       if (agent.authHeader) headers[agent.authHeader] = agent.apiKey;
       else headers['Authorization'] = `Bearer ${agent.apiKey}`;
     }
+    const last = [...messages].reverse().find((m) => m.role === 'user');
     const res = await axios.post(
       agent.url,
-      { messages, system, data: contextData ?? null },
+      {
+        messages,
+        system,
+        data: contextData ?? null,
+        // Convenience fields so simple conversation APIs work without parsing the full transcript.
+        conversationId: conversationId ?? null,
+        message: last?.content ?? '',
+      },
       { headers, timeout: 30000, validateStatus: () => true },
     );
     if (res.status >= 400) {

@@ -45,13 +45,23 @@ export class AppsController {
   }
 
   @Post(':id/deploy')
-  deploy(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.service.setDeployed(id, true, user);
+  deploy(@Param('id') id: string, @Body() body: { note?: string }, @CurrentUser() user: AuthUser) {
+    return this.service.setDeployed(id, true, user, body?.note);
   }
 
   @Post(':id/undeploy')
   undeploy(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.service.setDeployed(id, false, user);
+  }
+
+  @Get(':id/versions')
+  versions(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.service.listVersions(id, user);
+  }
+
+  @Post(':id/rollback')
+  rollback(@Param('id') id: string, @Body() body: { version: number }, @CurrentUser() user: AuthUser) {
+    return this.service.rollback(id, Number(body?.version), user);
   }
 
   @Put(':id/sharing')
@@ -74,6 +84,6 @@ export class AppsController {
   @Public()
   @Post(':id/chat')
   chat(@Param('id') id: string, @Body() dto: ChatDto, @CurrentUser() user?: AuthUser) {
-    return this.service.chat(id, dto.pageId, dto.messages, user);
+    return this.service.chat(id, dto.pageId, dto.messages, user, dto.conversationId);
   }
 }

@@ -244,13 +244,59 @@ export class AppsService {
   }
 
   /** Deploy = publish the current draft as a versioned snapshot served to runners. */
-  async setDeployed(id: string, deployed: boolean, user: AuthUser) {
+  async setDeployed(id: string, deployed: boolean, user: AuthUser, note?: string) {
     const app = await this.getOrThrow(id);
     if (!this.canEdit(app, user)) throw new ForbiddenException('You cannot deploy this app');
-    const data: Prisma.AppUpdateInput = deployed
-      ? { status: 'deployed', deployedAt: new Date(), publishedDefinition: app.definition, version: { increment: 1 } }
-      : { status: 'draft' };
-    const updated = await this.prisma.app.update({ where: { id }, data, include: this.include });
+    if (!deployed) {
+      const updated = await this.prisma.app.update({ where: { id }, data: { status: 'draft' }, include: this.include });
+      return this.serialize(updated, user);
+    }
+    const nextVersion = app.version + 1;
+    const [, updated] = await this.prisma.$transaction([
+      this.prisma.appVersion.create({
+        data: { appId: id, version: nextVersion, definition: app.definition, note: note?.trim() || null, createdById: user.id },
+      }),
+      this.prisma.app.update({
+        where: { id },
+        data: { status: 'deployed', deployedAt: new Date(), publishedDefinition: app.definition, version: nextVersion },
+        include: this.include,
+      }),
+    ]);
+    return this.serialize(updated, user);
+  }
+
+  /** Version history for the editor's rollback UI (editors only). */
+  async listVersions(id: string, user: AuthUser) {
+    const app = await this.getOrThrow(id);
+    if (!this.canEdit(app, user)) throw new ForbiddenException('You cannot view versions for this app');
+    const rows = await this.prisma.appVersion.findMany({ where: { appId: id }, orderBy: { version: 'desc' } });
+    const creatorIds = [...new Set(rows.map((r) => r.createdById).filter((x): x is string => !!x))];
+    const creators = creatorIds.length
+      ? await this.prisma.user.findMany({ where: { id: { in: creatorIds } }, select: { id: true, name: true, email: true } })
+      : [];
+    const nameById = new Map(creators.map((c) => [c.id, c.name || c.email]));
+    return rows.map((r) => ({
+      id: r.id,
+      version: r.version,
+      note: r.note,
+      createdBy: r.createdById ? nameById.get(r.createdById) ?? null : null,
+      createdAt: r.createdAt,
+      pageCount: normalizeDefinition(JSON.parse(r.definition)).pages.length,
+      isCurrent: r.version === app.version,
+    }));
+  }
+
+  /** Restore a previous version into the editable draft (does not auto-publish). */
+  async rollback(id: string, version: number, user: AuthUser) {
+    const app = await this.getOrThrow(id);
+    if (!this.canEdit(app, user)) throw new ForbiddenException('You cannot roll back this app');
+    const snapshot = await this.prisma.appVersion.findUnique({ where: { appId_version: { appId: id, version } } });
+    if (!snapshot) throw new NotFoundException(`Version ${version} not found`);
+    const updated = await this.prisma.app.update({
+      where: { id },
+      data: { definition: snapshot.definition },
+      include: this.include,
+    });
     return this.serialize(updated, user);
   }
 
@@ -340,7 +386,7 @@ export class AppsService {
     return (cfg.method || 'GET').toUpperCase() !== 'GET';
   }
 
-  async chat(id: string, pageId: string | undefined, messages: ChatMessage[], user?: AuthUser) {
+  async chat(id: string, pageId: string | undefined, messages: ChatMessage[], user?: AuthUser, conversationId?: string) {
     const app = await this.getOrThrow(id);
     this.assertRunnable(app, user);
 
@@ -358,6 +404,6 @@ export class AppsService {
       }
     }
 
-    return this.agent.chat(this.aiConfigOf(app), system, messages, contextData);
+    return this.agent.chat(this.aiConfigOf(app), system, messages, contextData, conversationId);
   }
 }

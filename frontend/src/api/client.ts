@@ -78,6 +78,20 @@ export interface AiStatus {
   model: string | null;
 }
 
+export type EditorMode = 'ai' | 'canvas' | 'code';
+export type ComponentType =
+  | 'heading' | 'text' | 'metric' | 'table' | 'chart'
+  | 'button' | 'textInput' | 'fileUpload' | 'image' | 'divider' | 'container';
+export interface UiComponent {
+  id: string;
+  type: ComponentType;
+  props: Record<string, unknown>;
+  children?: UiComponent[];
+}
+export interface CanvasLayout {
+  components: UiComponent[];
+}
+
 export interface AppPage {
   id: string;
   name: string;
@@ -87,8 +101,29 @@ export interface AppPage {
   prompt?: string;
   queryId?: string;
   sample?: string;
+  layout?: CanvasLayout;
+  editorMode?: EditorMode;
   chat?: { systemPrompt?: string; queryId?: string; greeting?: string };
   actions?: { name: string; queryId: string }[];
+}
+export interface AppVersion {
+  id: string;
+  version: number;
+  note?: string | null;
+  createdBy?: string | null;
+  createdAt: string;
+  pageCount: number;
+  isCurrent: boolean;
+}
+export interface Connector {
+  id: string;
+  name: string;
+  description?: string | null;
+  category?: string | null;
+  type: DataSourceType;
+  config: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
 }
 export interface AppDefinition {
   pages: AppPage[];
@@ -225,9 +260,19 @@ export const api = {
   runInline: (appId: string, body: { dataSourceId: string; config: Record<string, unknown> }) =>
     http.post<ExecutionResult>(`/apps/${appId}/queries/run`, body).then((r) => r.data),
 
+  // connectors (prebuilt, admin-curated)
+  listConnectors: () => http.get<Connector[]>('/connectors').then((r) => r.data),
+  createConnector: (body: { name: string; description?: string; category?: string; type: DataSourceType; config: Record<string, unknown> }) =>
+    http.post<Connector>('/connectors', body).then((r) => r.data),
+  updateConnector: (id: string, body: Partial<{ name: string; description: string; category: string; type: DataSourceType; config: Record<string, unknown> }>) =>
+    http.put<Connector>(`/connectors/${id}`, body).then((r) => r.data),
+  deleteConnector: (id: string) => http.delete(`/connectors/${id}`).then((r) => r.data),
+  addConnectorToApp: (appId: string, connectorId: string, name?: string) =>
+    http.post<DataSource>(`/apps/${appId}/datasources/from-connector/${connectorId}`, { name }).then((r) => r.data),
+
   // ai
   aiStatus: () => http.get<AiStatus>('/ai/status').then((r) => r.data),
-  generateUi: (body: { prompt: string; sample: string; queryName?: string; currentHtml?: string }) =>
+  generateUi: (body: { prompt: string; sample: string; queryName?: string; currentHtml?: string; dataGuidance?: string }) =>
     http.post<GenerateUiResult>('/ai/generate-ui', body).then((r) => r.data),
 
   // apps
@@ -240,14 +285,16 @@ export const api = {
   updateApp: (id: string, body: { name?: string; description?: string; definition?: AppDefinition; aiConfig?: AppAiConfig }) =>
     http.put<AppFull>(`/apps/${id}`, body).then((r) => r.data),
   deleteApp: (id: string) => http.delete(`/apps/${id}`).then((r) => r.data),
-  deployApp: (id: string) => http.post<AppFull>(`/apps/${id}/deploy`).then((r) => r.data),
+  deployApp: (id: string, note?: string) => http.post<AppFull>(`/apps/${id}/deploy`, { note }).then((r) => r.data),
   undeployApp: (id: string) => http.post<AppFull>(`/apps/${id}/undeploy`).then((r) => r.data),
+  listVersions: (id: string) => http.get<AppVersion[]>(`/apps/${id}/versions`).then((r) => r.data),
+  rollbackApp: (id: string, version: number) => http.post<AppFull>(`/apps/${id}/rollback`, { version }).then((r) => r.data),
   setSharing: (id: string, body: { visibility: Visibility; members: { email: string; role: 'editor' | 'viewer' }[] }) =>
     http.put<AppFull>(`/apps/${id}/sharing`, body).then((r) => r.data),
   appPageData: (id: string, pageId: string) =>
     http.get<{ data: unknown; meta?: unknown }>(`/apps/${id}/pages/${pageId}/data`).then((r) => r.data),
   appRunQuery: (id: string, body: { queryId?: string; action?: string; pageId?: string; params?: Record<string, unknown> }) =>
     http.post<{ data: unknown; meta?: unknown }>(`/apps/${id}/run-query`, body).then((r) => r.data),
-  chat: (id: string, body: { pageId?: string; messages: ChatMessage[] }) =>
+  chat: (id: string, body: { pageId?: string; messages: ChatMessage[]; conversationId?: string }) =>
     http.post<{ reply: string; source: string }>(`/apps/${id}/chat`, body).then((r) => r.data),
 };

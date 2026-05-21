@@ -18,19 +18,29 @@ SSO login ─▶ build app (UI + chat pages, bound to data) ─▶ deploy ─▶
 - **Users & roles** — `admin` (manage users, templates, settings) and `member` (build & use apps),
   plus **per-app roles** (owner / editor / viewer). Users are auto-provisioned on first login.
 - **Multi-page apps** — each app has pages you navigate between:
-  - **UI pages**: AI-generated dashboards/tables bound to a query (rendered from live `window.APP_DATA`).
+  - **UI pages**: author three ways and switch freely — a **drag-and-drop builder** (component
+    palette → canvas → properties), **AI generation** from query output, or **direct source-code
+    editing**. All render from live `window.APP_DATA`.
   - **Chat pages**: a conversational assistant, optionally grounded on a query's data.
-- **Interactive UIs & write-back** — generated pages get a `window.UIFactory` bridge to run
-  parameterized queries, refresh, navigate between pages, and submit forms that **write back**
-  (INSERT/UPDATE/DELETE / POST). Apps may only run queries they explicitly reference.
-- **Versioned publish** — editing happens on a draft; **Deploy/Publish** snapshots a version that
-  runners see. The editor flags unpublished changes; re-publish to roll the live version forward.
+- **Drag-and-drop builder** — drop headings, tables, charts, KPI metrics, inputs, file uploads, and
+  action buttons onto a canvas and bind them to your data; compiles to the same self-contained HTML
+  the runtime serves. A guided "add a component" panel also seeds the AI prompt.
+- **View & edit source** — every generated/built page exposes its HTML in a code editor with a live
+  preview, so you can hand-tweak anything.
+- **Interactive UIs & write-back** — pages get a `window.UIFactory` bridge to run parameterized
+  queries, refresh, navigate, **read user-selected files** (`UIFactory.readFile`), and submit forms
+  that **write back** (INSERT/UPDATE/DELETE / POST). Apps may only run queries they explicitly reference.
+- **Versioned publish & rollback** — editing happens on a draft; **Deploy/Publish** snapshots an
+  immutable version that runners see. A **Versions** panel lists the history and **restores any
+  previous version** back into the draft for review and re-publish.
 - **Iterative AI editing** — refine a generated page with follow-up instructions ("add a bar chart").
-- **Per-app AI / agent connection** — each app brings its own key. Point a chat (or any UI) at the
-  platform's default LLM, **this app's own provider key** (Claude / OpenAI / Azure OpenAI), or an
-  **external agent API** (your own endpoint). Falls back to a mock reply when nothing is configured.
-- **Data sources** — REST APIs, PostgreSQL, or SQLite; run SQL/REST queries and preview results as a
-  table, chart, or JSON.
+- **Per-app AI / conversation connection** — each app brings its own key. Point a chat (or any UI) at
+  the platform's default LLM, **this app's own provider key** (Claude / OpenAI / Azure OpenAI), or an
+  **external conversation-AI API** (your own assistant endpoint — it receives the transcript, the
+  latest message, and a stable `conversationId` for stateful threads). Falls back to a mock reply.
+- **Data sources & prebuilt connectors** — REST APIs, PostgreSQL, SQLite, or Microsoft 365 per app;
+  REST queries can carry a **method, request body, and schema/usage guidance** that steers the AI.
+  Admins curate **prebuilt connectors** that any member can clone into an app in one click.
 - **Deploy & catalog** — deploy finished apps onto the platform; permitted users run them from a catalog.
 - **Sharing** — `private` (specific people), `org` (anyone signed in), or `public`; pick individual
   members from the Azure org directory.
@@ -104,11 +114,12 @@ these, chat returns a clearly-labelled mock reply.
 | Users (admin) | `GET /users`, `PATCH /users/:id` |
 | Org directory | `GET /org/users?q=` |
 | Templates | `GET /templates`, `POST /templates` (admin), `POST /templates/from-app/:id` (admin), `DELETE /templates/:id` (admin) |
+| Connectors | `GET /connectors`, `POST /connectors` (admin), `PUT/DELETE /connectors/:id` (admin) |
 | Settings | `GET /settings`, `PUT /settings` (admin) |
-| Data sources | `GET/POST/PUT/DELETE /datasources[/:id]`, `POST /datasources/:id/test` |
-| Queries | `GET/POST/PUT/DELETE /queries[/:id]`, `POST /queries/run` |
-| AI | `GET /ai/status`, `POST /ai/generate-ui` |
-| Apps | `GET /apps` (mine), `GET /apps/catalog`, `GET /apps/by-slug/:slug`, CRUD `/apps[/:id]`, `POST /apps/:id/deploy`\|`/undeploy`, `PUT /apps/:id/sharing`, `GET /apps/:id/pages/:pageId/data`, `POST /apps/:id/chat` |
+| Data sources | `GET/POST/PUT/DELETE /apps/:appId/datasources[/:id]`, `POST .../:id/test`, `POST .../from-connector/:connectorId` |
+| Queries | `GET/POST/PUT/DELETE /apps/:appId/queries[/:id]`, `POST .../:id/run` |
+| AI | `GET /ai/status`, `POST /ai/generate-ui` (accepts `dataGuidance`) |
+| Apps | `GET /apps` (mine), `GET /apps/catalog`, `GET /apps/by-slug/:slug`, CRUD `/apps[/:id]`, `POST /apps/:id/deploy`\|`/undeploy`, `GET /apps/:id/versions`, `POST /apps/:id/rollback`, `PUT /apps/:id/sharing`, `GET /apps/:id/pages/:pageId/data`, `POST /apps/:id/chat` |
 
 ## Project layout
 

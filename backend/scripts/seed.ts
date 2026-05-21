@@ -101,8 +101,9 @@ async function main() {
 
   console.log('Resetting UIFactory metadata…');
   await prisma.appMembership.deleteMany();
-  await prisma.app.deleteMany();
+  await prisma.app.deleteMany(); // cascades AppVersion
   await prisma.template.deleteMany();
+  await prisma.connector.deleteMany();
   await prisma.query.deleteMany();
   await prisma.dataSource.deleteMany();
   await prisma.setting.deleteMany();
@@ -231,6 +232,19 @@ async function main() {
   }
   console.log(`  -> ${templates.length} templates created`);
 
+  console.log('Creating prebuilt connectors…');
+  const connectors: { name: string; description: string; category: string; type: string; config: Record<string, unknown> }[] = [
+    { name: 'Sample Business DB (SQLite)', description: 'The seeded customers / products / orders database.', category: 'Internal', type: 'SQLITE', config: { file: sampleDbPath } },
+    { name: 'JSONPlaceholder (REST API)', description: 'Public demo REST API for users, posts and todos.', category: 'Integration', type: 'REST', config: { baseUrl: 'https://jsonplaceholder.typicode.com' } },
+    { name: 'Microsoft 365 (Graph)', description: 'Org directory, mail and calendar via Microsoft Graph.', category: 'Microsoft', type: 'MSGRAPH', config: {} },
+  ];
+  for (const c of connectors) {
+    await prisma.connector.create({
+      data: { name: c.name, description: c.description, category: c.category, type: c.type, config: encryptString(JSON.stringify(c.config)), createdById: admin.id },
+    });
+  }
+  console.log(`  -> ${connectors.length} prebuilt connectors created`);
+
   console.log('Creating a sample deployed app…');
   const sApp = await prisma.app.create({
     data: {
@@ -257,6 +271,9 @@ async function main() {
   await prisma.app.update({
     where: { id: sApp.id },
     data: { definition: sampleJson, publishedDefinition: sampleJson, version: 1, visibility: 'org', status: 'deployed', deployedAt: new Date() },
+  });
+  await prisma.appVersion.create({
+    data: { appId: sApp.id, version: 1, definition: sampleJson, note: 'Initial published version', createdById: admin.id },
   });
 
   await prisma.setting.create({ data: { key: 'platformName', value: JSON.stringify('UIFactory') } });

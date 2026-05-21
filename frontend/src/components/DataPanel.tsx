@@ -6,7 +6,7 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import BoltIcon from '@mui/icons-material/Bolt';
-import { api, DataSource, DataSourceType, QueryDef } from '../api/client';
+import { api, Connector, DataSource, DataSourceType, QueryDef } from '../api/client';
 import ResultView from './ResultView';
 
 const TYPE_LABEL: Record<DataSourceType, string> = { REST: 'REST API', POSTGRES: 'PostgreSQL', SQLITE: 'SQLite', MSGRAPH: 'Microsoft 365' };
@@ -25,6 +25,8 @@ function dsConfigFromForm(type: DataSourceType, f: { baseUrl: string; connection
 export default function DataPanel({ appId, open, onClose, onChanged }: { appId: string; open: boolean; onClose: () => void; onChanged: () => void }) {
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
   const [queries, setQueries] = useState<QueryDef[]>([]);
+  const [connectors, setConnectors] = useState<Connector[]>([]);
+  const [connectorId, setConnectorId] = useState('');
   const [error, setError] = useState('');
   const [msg, setMsg] = useState('');
 
@@ -39,11 +41,14 @@ export default function DataPanel({ appId, open, onClose, onChanged }: { appId: 
   const [qSql, setQSql] = useState('SELECT 1;');
   const [qMethod, setQMethod] = useState('GET');
   const [qPath, setQPath] = useState('');
+  const [qBody, setQBody] = useState('');
+  const [qSchema, setQSchema] = useState('');
   const [qResult, setQResult] = useState<unknown>(null);
 
   const load = () => {
     api.listDataSources(appId).then(setDataSources).catch((e) => setError(api.errMessage(e)));
     api.listQueries(appId).then(setQueries).catch(() => undefined);
+    api.listConnectors().then(setConnectors).catch(() => undefined);
   };
   useEffect(() => {
     if (open) load();
@@ -59,6 +64,15 @@ export default function DataPanel({ appId, open, onClose, onChanged }: { appId: 
       load(); onChanged(); notify('Data source added');
     } catch (e) { setError(api.errMessage(e)); }
   };
+  const addFromConnector = async () => {
+    if (!connectorId) return;
+    setError('');
+    try {
+      await api.addConnectorToApp(appId, connectorId);
+      setConnectorId('');
+      load(); onChanged(); notify('Connector added to app');
+    } catch (e) { setError(api.errMessage(e)); }
+  };
   const testNew = async () => {
     setError('');
     try {
@@ -69,12 +83,22 @@ export default function DataPanel({ appId, open, onClose, onChanged }: { appId: 
   const removeDs = async (id: string) => { await api.deleteDataSource(appId, id); load(); onChanged(); };
 
   const selectedDsType = dataSources.find((d) => d.id === qDs)?.type;
+  const isSql = selectedDsType === 'SQLITE' || selectedDsType === 'POSTGRES';
   const addQuery = async () => {
     setError('');
-    const config = selectedDsType === 'SQLITE' || selectedDsType === 'POSTGRES' ? { sql: qSql } : { method: qMethod, path: qPath };
+    let config: Record<string, unknown>;
+    if (isSql) {
+      config = { sql: qSql };
+    } else {
+      config = { method: qMethod, path: qPath };
+      if (qMethod !== 'GET' && qBody.trim()) {
+        try { config.body = JSON.parse(qBody); } catch { config.body = qBody; }
+      }
+      if (qSchema.trim()) config.schema = qSchema.trim();
+    }
     try {
       await api.createQuery(appId, { name: qName.trim(), dataSourceId: qDs, config });
-      setQName(''); setQResult(null);
+      setQName(''); setQResult(null); setQBody(''); setQSchema('');
       load(); onChanged(); notify('Query saved');
     } catch (e) { setError(api.errMessage(e)); }
   };
@@ -106,6 +130,18 @@ export default function DataPanel({ appId, open, onClose, onChanged }: { appId: 
           ))}
           {dataSources.length === 0 && <Typography variant="caption" color="text.secondary">No data sources yet.</Typography>}
         </Stack>
+        {connectors.length > 0 && (
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
+            <TextField select size="small" label="Add a prebuilt connector" value={connectorId} onChange={(e) => setConnectorId(e.target.value)} fullWidth>
+              <MenuItem value="">Select…</MenuItem>
+              {connectors.map((c) => (
+                <MenuItem key={c.id} value={c.id}>{c.name} · {TYPE_LABEL[c.type]}{c.category ? ` · ${c.category}` : ''}</MenuItem>
+              ))}
+            </TextField>
+            <Button size="small" variant="outlined" startIcon={<AddIcon />} disabled={!connectorId} onClick={addFromConnector}>Add</Button>
+          </Stack>
+        )}
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>…or configure one manually:</Typography>
         <Stack spacing={1.2} sx={{ p: 1.5, border: '1px dashed', borderColor: 'divider', borderRadius: 1, mb: 3 }}>
           <TextField size="small" label="Name" value={dsName} onChange={(e) => setDsName(e.target.value)} />
           <TextField select size="small" label="Type" value={dsType} onChange={(e) => setDsType(e.target.value as DataSourceType)}>
@@ -144,16 +180,22 @@ export default function DataPanel({ appId, open, onClose, onChanged }: { appId: 
             <MenuItem value="">Select…</MenuItem>
             {dataSources.map((d) => <MenuItem key={d.id} value={d.id}>{d.name} · {TYPE_LABEL[d.type]}</MenuItem>)}
           </TextField>
-          {(selectedDsType === 'SQLITE' || selectedDsType === 'POSTGRES') && (
+          {isSql && (
             <TextField label="SQL" value={qSql} onChange={(e) => setQSql(e.target.value)} multiline minRows={3} size="small" slotProps={{ input: { sx: { fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 13 } } }} />
           )}
           {(selectedDsType === 'REST' || selectedDsType === 'MSGRAPH') && (
-            <Stack direction="row" spacing={1}>
-              <TextField select size="small" label="Method" value={qMethod} onChange={(e) => setQMethod(e.target.value)} sx={{ width: 110 }}>
-                {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => <MenuItem key={m} value={m}>{m}</MenuItem>)}
-              </TextField>
-              <TextField size="small" fullWidth label={selectedDsType === 'MSGRAPH' ? 'Graph path (e.g. users)' : 'Path (e.g. /users)'} value={qPath} onChange={(e) => setQPath(e.target.value)} />
-            </Stack>
+            <>
+              <Stack direction="row" spacing={1}>
+                <TextField select size="small" label="Method" value={qMethod} onChange={(e) => setQMethod(e.target.value)} sx={{ width: 110 }}>
+                  {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => <MenuItem key={m} value={m}>{m}</MenuItem>)}
+                </TextField>
+                <TextField size="small" fullWidth label={selectedDsType === 'MSGRAPH' ? 'Graph path (e.g. users)' : 'Path (e.g. /users)'} value={qPath} onChange={(e) => setQPath(e.target.value)} />
+              </Stack>
+              {qMethod !== 'GET' && (
+                <TextField size="small" label="Request body (JSON, supports {{params}})" value={qBody} onChange={(e) => setQBody(e.target.value)} multiline minRows={2} slotProps={{ input: { sx: { fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 12.5 } } }} />
+              )}
+              <TextField size="small" label="API schema / usage guidance (steers the AI)" placeholder="e.g. Returns [{id,name,email}]. Use email as the unique key; status is one of active|pending." value={qSchema} onChange={(e) => setQSchema(e.target.value)} multiline minRows={2} />
+            </>
           )}
           <Box textAlign="right">
             <Button size="small" variant="contained" startIcon={<AddIcon />} disabled={!qName.trim() || !qDs} onClick={addQuery}>Save query</Button>

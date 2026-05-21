@@ -66,6 +66,11 @@ export class ChatDto {
   @IsString()
   pageId?: string;
 
+  /** Stable id for the current chat session — forwarded to external conversation APIs for continuity. */
+  @IsOptional()
+  @IsString()
+  conversationId?: string;
+
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => ChatMessageDto)

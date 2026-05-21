@@ -72,6 +72,35 @@ model App {
   memberships         AppMembership[]
   dataSources         DataSource[]
   queries             Query[]
+  versions            AppVersion[]
+}
+
+/// An immutable snapshot of an app definition, captured on each publish — enables rollback.
+model AppVersion {
+  id          String   @id @default(cuid())
+  appId       String
+  app         App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  version     Int
+  definition  String // JSON snapshot of the published definition
+  note        String?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@unique([appId, version])
+  @@index([appId])
+}
+
+/// A platform-wide, admin-curated data-source connection that any app can clone in ("prebuilt connector").
+model Connector {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  category    String?
+  type        String // REST | POSTGRES | SQLITE | MSGRAPH
+  config      String // encrypted JSON (same shape as a DataSource config)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 /// Per-app collaborator role. Keyed by email so org members can be added before they log in.
