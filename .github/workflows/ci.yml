@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Prisma generate
+        run: npx prisma generate --schema backend/prisma/schema.prisma
+      - name: Build backend
+        run: npm run build --workspace backend
+      - name: Build frontend (typecheck + bundle)
+        run: npm run build --workspace frontend
+
+  helm:
+    name: Helm lint & template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+      - name: Helm lint
+        run: helm lint charts/uifactory --values charts/uifactory/values-dev.yaml
+      - name: Helm template (dev / test / prod)
+        run: |
+          for env in dev test prod; do
+            echo "== rendering values-$env.yaml =="
+            helm template uifactory charts/uifactory \
+              --values charts/uifactory/values-$env.yaml \
+              --set image.registry=example.azurecr.io --set image.tag=ci > /dev/null
+          done
+
+  docker:
+    name: Build container images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          tags: uifactory-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.frontend
+          push: false
+          tags: uifactory-frontend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
