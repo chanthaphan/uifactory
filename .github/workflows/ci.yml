@@ -62,8 +62,6 @@ jobs:
           file: Dockerfile
           push: false
           tags: uifactory-api:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
       - name: Build frontend image
         uses: docker/build-push-action@v6
         with:
@@ -71,5 +69,3 @@ jobs:
           file: Dockerfile.frontend
           push: false
           tags: uifactory-frontend:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
