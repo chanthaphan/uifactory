@@ -4,6 +4,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import OpenAI, { AzureOpenAI } from 'openai';
 import { AppAiConfig } from './app-defs';
 import { detectProviderName, defaultModel } from '../ai/ai.providers';
+import { assertSafeUrl } from '../common/safe-url';
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
@@ -100,6 +101,9 @@ export class AgentService {
   }
 
   private async callProvider(spec: ProviderSpec, system: string, messages: ChatMessage[]): Promise<string> {
+    // Guard user-supplied (per-app) provider base URLs / endpoints against SSRF.
+    if (spec.baseUrl) await assertSafeUrl(spec.baseUrl);
+    if (spec.endpoint) await assertSafeUrl(spec.endpoint);
     if (spec.name === 'anthropic') {
       const client = new Anthropic({ apiKey: spec.apiKey, baseURL: spec.baseUrl || undefined });
       const res = await client.messages.create({
@@ -130,6 +134,7 @@ export class AgentService {
 
   private async callAgentApi(cfg: AppAiConfig, system: string, messages: ChatMessage[], contextData?: unknown): Promise<string> {
     const agent = cfg.agent!;
+    await assertSafeUrl(agent.url); // SSRF guard: external agent endpoint is user-supplied
     const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(agent.extraHeaders || {}) };
     if (agent.apiKey) {
       if (agent.authHeader) headers[agent.authHeader] = agent.apiKey;
