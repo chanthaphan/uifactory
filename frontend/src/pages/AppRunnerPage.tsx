@@ -26,7 +26,7 @@ function UiPageRunner({ appId, page, onNavigate }: { appId: string; page: AppPag
   }, [appId, page.id, page.queryId]);
 
   const bridge: PreviewBridge = {
-    runQuery: (queryId, params) => api.appRunQuery(appId, { queryId, params }),
+    runQuery: (queryId, params) => api.appRunQuery(appId, { queryId, pageId: page.id, params }),
     runAction: (name, params) => api.appRunQuery(appId, { action: name, pageId: page.id, params }),
     refresh: async () => {
       const res = await api.appPageData(appId, page.id);

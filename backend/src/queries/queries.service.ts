@@ -4,6 +4,7 @@ import { ExecutionService } from '../execution/execution.service';
 import { DataSourcesService } from '../datasources/datasources.service';
 import { AppAccessService } from '../apps/app-access.service';
 import { CreateQueryDto, UpdateQueryDto } from './dto/query.dto';
+import { LIMITS } from '../common/limits';
 import { AuthUser } from '../auth/auth.types';
 
 @Injectable()
@@ -57,6 +58,10 @@ export class QueriesService {
 
   async create(appId: string, dto: CreateQueryDto, user: AuthUser) {
     await this.access.assertCanEdit(appId, user);
+    const count = await this.prisma.query.count({ where: { appId } });
+    if (count >= LIMITS.maxQueriesPerApp) {
+      throw new BadRequestException(`This app already has the maximum of ${LIMITS.maxQueriesPerApp} queries.`);
+    }
     await this.assertDataSourceInApp(dto.dataSourceId, appId);
     const row = await this.prisma.query.create({
       data: { name: dto.name, dataSourceId: dto.dataSourceId, appId, config: JSON.stringify(dto.config) },

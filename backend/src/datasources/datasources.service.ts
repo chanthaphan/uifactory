@@ -7,6 +7,8 @@ import { DataSourceType } from '../execution/execution.types';
 import { AuthUser } from '../auth/auth.types';
 import { decryptString, encryptString } from '../common/crypto.util';
 import { redactConfig } from '../common/redact.util';
+import { LIMITS } from '../common/limits';
+import { BadRequestException } from '@nestjs/common';
 
 type DsRow = { id: string; name: string; type: string; config: string; appId: string; createdAt: Date; updatedAt: Date };
 
@@ -54,8 +56,16 @@ export class DataSourcesService {
     return { ...row, parsedConfig: this.parseConfig(row), type: row.type as DataSourceType };
   }
 
+  private async assertDataSourceCapacity(appId: string) {
+    const count = await this.prisma.dataSource.count({ where: { appId } });
+    if (count >= LIMITS.maxDataSourcesPerApp) {
+      throw new BadRequestException(`This app already has the maximum of ${LIMITS.maxDataSourcesPerApp} data sources.`);
+    }
+  }
+
   async create(appId: string, dto: CreateDataSourceDto, user: AuthUser) {
     await this.access.assertCanEdit(appId, user);
+    await this.assertDataSourceCapacity(appId);
     const row = await this.prisma.dataSource.create({
       data: { name: dto.name, type: dto.type, config: encryptString(JSON.stringify(dto.config)), appId },
     });
@@ -65,6 +75,7 @@ export class DataSourcesService {
   /** Clone an admin-curated prebuilt connector into a new per-app data source. */
   async createFromConnector(appId: string, connectorId: string, name: string | undefined, user: AuthUser) {
     await this.access.assertCanEdit(appId, user);
+    await this.assertDataSourceCapacity(appId);
     const connector = await this.prisma.connector.findUnique({ where: { id: connectorId } });
     if (!connector) throw new NotFoundException(`Connector ${connectorId} not found`);
     const row = await this.prisma.dataSource.create({

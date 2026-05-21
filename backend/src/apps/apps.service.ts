@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { QueriesService } from '../queries/queries.service';
@@ -7,6 +7,7 @@ import { AiService, GenerateUiResult } from '../ai/ai.service';
 import { GenerateUiDto } from '../ai/dto/generate.dto';
 import { ConversationsService } from '../conversations/conversations.service';
 import { LIMITS, countWords } from '../common/limits';
+import { RateLimiter } from '../common/rate-limiter';
 import { AuthUser } from '../auth/auth.types';
 import { CreateAppDto, SharingDto, UpdateAppDto } from './dto/app.dto';
 import {
@@ -37,6 +38,14 @@ export class AppsService {
   ) {}
 
   private include = { owner: true, memberships: true } as const;
+  private readonly genLimiter = new RateLimiter(LIMITS.aiGenerateRatePerMin, 60_000);
+  private readonly chatLimiter = new RateLimiter(LIMITS.chatRatePerMin, 60_000);
+
+  private assertRate(limiter: RateLimiter, key: string, what: string) {
+    if (!limiter.check(key)) {
+      throw new HttpException(`Rate limit exceeded for ${what}. Please slow down and try again shortly.`, HttpStatus.TOO_MANY_REQUESTS);
+    }
+  }
 
   // ---- access control ----
 
@@ -231,7 +240,13 @@ export class AppsService {
     const data: Prisma.AppUpdateInput = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.description !== undefined) data.description = dto.description;
-    if (dto.definition !== undefined) data.definition = JSON.stringify(normalizeDefinition(dto.definition));
+    if (dto.definition !== undefined) {
+      const normalized = normalizeDefinition(dto.definition);
+      if (normalized.pages.length > LIMITS.maxPagesPerApp) {
+        throw new BadRequestException(`Too many pages: ${normalized.pages.length} (max ${LIMITS.maxPagesPerApp}).`);
+      }
+      data.definition = JSON.stringify(normalized);
+    }
     if (dto.aiConfig !== undefined) {
       const merged = mergeAiConfig(this.aiConfigOf(app), dto.aiConfig as never);
       data.aiConfig = encryptString(JSON.stringify(merged));
@@ -344,6 +359,12 @@ export class AppsService {
     return new Set(collectQueryIds(def));
   }
 
+  /** Query ids a single page may run: its bound query, its chat query, and its named actions. */
+  private pageQueryIds(page: AppDefinition['pages'][number]): Set<string> {
+    const ids = [page.queryId, page.chat?.queryId, ...(page.actions ?? []).map((a) => a.queryId)];
+    return new Set(ids.filter((x): x is string => !!x));
+  }
+
   async pageData(id: string, pageId: string, user?: AuthUser) {
     const app = await this.getOrThrow(id);
     this.assertRunnable(app, user);
@@ -366,9 +387,9 @@ export class AppsService {
     this.assertRunnable(app, user);
     const def = this.runtimeDefinition(app, user);
 
+    const page = body.pageId ? def.pages.find((p) => p.id === body.pageId) : undefined;
     let queryId = body.queryId;
     if (!queryId && body.action) {
-      const page = body.pageId ? def.pages.find((p) => p.id === body.pageId) : undefined;
       const pages = page ? [page] : def.pages;
       for (const p of pages) {
         const found = (p.actions ?? []).find((a) => a.name === body.action);
@@ -379,8 +400,10 @@ export class AppsService {
       }
     }
     if (!queryId) throw new NotFoundException('Unknown query or action');
-    if (!this.allowedQueryIds(def).has(queryId)) {
-      throw new ForbiddenException('This query is not part of the app');
+    // Scope to the calling page when known (page isolation); otherwise fall back to the whole app.
+    const allowed = page ? this.pageQueryIds(page) : this.allowedQueryIds(def);
+    if (!allowed.has(queryId)) {
+      throw new ForbiddenException(page ? 'This query is not available on this page' : 'This query is not part of the app');
     }
     // Per-app guard: non-editors may run write (mutation) actions only when allowed.
     if (def.allowWriteActions === false && !this.canEdit(app, user) && (await this.isMutationQuery(queryId))) {
@@ -433,6 +456,7 @@ export class AppsService {
   async chat(id: string, pageId: string | undefined, messages: ChatMessage[], user?: AuthUser, conversationId?: string, persist?: boolean) {
     const app = await this.getOrThrow(id);
     this.assertRunnable(app, user);
+    this.assertRate(this.chatLimiter, user?.id ?? 'anon', 'chat');
     this.assertChatInputWithinLimit(messages);
     const { system, contextData } = await this.chatContext(app, pageId, user);
     const doPersist = Boolean(persist && user);
@@ -455,6 +479,7 @@ export class AppsService {
   ) {
     const app = await this.getOrThrow(id);
     this.assertRunnable(app, user);
+    this.assertRate(this.chatLimiter, user?.id ?? 'anon', 'chat');
     this.assertChatInputWithinLimit(messages);
     const { system, contextData } = await this.chatContext(app, pageId, user);
     const doPersist = Boolean(persist && user);
@@ -480,6 +505,7 @@ export class AppsService {
   async generateUi(id: string, dto: GenerateUiDto, user: AuthUser): Promise<GenerateUiResult> {
     const app = await this.getOrThrow(id);
     if (!this.canEdit(app, user)) throw new ForbiddenException('You cannot edit this app');
+    this.assertRate(this.genLimiter, user.id, 'UI generation');
 
     const def = normalizeDefinition(JSON.parse(app.definition));
     const guidelines = dto.guidelines ?? def.buildGuidelines;

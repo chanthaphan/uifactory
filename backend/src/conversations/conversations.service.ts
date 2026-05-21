@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AppAccessService } from '../apps/app-access.service';
+import { LIMITS } from '../common/limits';
 import { AuthUser } from '../auth/auth.types';
 
 @Injectable()
@@ -62,10 +63,11 @@ export class ConversationsService {
     const created = await this.prisma.conversation.create({
       data: { appId, pageId: pageId ?? null, userId, title: this.title(titleSeed) },
     });
+    await this.pruneConversations(appId, userId, pageId ?? null);
     return created.id;
   }
 
-  /** Append one user + assistant turn to a thread and bump its updatedAt. */
+  /** Append one user + assistant turn to a thread, bump updatedAt, and trim old messages. */
   async appendTurn(conversationId: string, userContent: string, assistantContent: string): Promise<void> {
     await this.prisma.message.createMany({
       data: [
@@ -74,5 +76,24 @@ export class ConversationsService {
       ],
     });
     await this.prisma.conversation.update({ where: { id: conversationId }, data: { updatedAt: new Date() } });
+    await this.pruneMessages(conversationId);
+  }
+
+  /** Keep only the newest N threads per (user, app, page); delete older ones. */
+  private async pruneConversations(appId: string, userId: string, pageId: string | null): Promise<void> {
+    const max = LIMITS.maxConversationsPerUserApp;
+    const rows = await this.prisma.conversation.findMany({
+      where: { appId, userId, pageId }, orderBy: { updatedAt: 'desc' }, select: { id: true }, skip: max,
+    });
+    if (rows.length) await this.prisma.conversation.deleteMany({ where: { id: { in: rows.map((r) => r.id) } } });
+  }
+
+  /** Keep only the newest N messages in a thread. */
+  private async pruneMessages(conversationId: string): Promise<void> {
+    const max = LIMITS.maxMessagesPerConversation;
+    const old = await this.prisma.message.findMany({
+      where: { conversationId }, orderBy: { createdAt: 'desc' }, select: { id: true }, skip: max,
+    });
+    if (old.length) await this.prisma.message.deleteMany({ where: { id: { in: old.map((r) => r.id) } } });
   }
 }

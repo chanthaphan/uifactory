@@ -152,7 +152,7 @@ function UiPageEditor({ appId, page, brandColor, status, onGenerate, onPatch, da
   const removeAction = (name: string) => onPatch({ actions: actions.filter((a) => a.name !== name) });
 
   const bridge: PreviewBridge = {
-    runQuery: (qid, params) => api.appRunQuery(appId, { queryId: qid, params }),
+    runQuery: (qid, params) => api.appRunQuery(appId, { queryId: qid, pageId: page.id, params }),
     runAction: (name, params) => api.appRunQuery(appId, { action: name, pageId: page.id, params }),
     refresh: async () => {
       if (!queryId) return { data: result };
