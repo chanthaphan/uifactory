@@ -6,6 +6,7 @@ import { AgentService, ChatMessage } from './agent.service';
 import { AuthUser } from '../auth/auth.types';
 import { CreateAppDto, SharingDto, UpdateAppDto } from './dto/app.dto';
 import {
+  AppAiConfig,
   AppDefinition,
   emptyDefinition,
   mergeAiConfig,
@@ -14,6 +15,7 @@ import {
   redactAiConfig,
   slugify,
 } from './app-defs';
+import { decryptString, encryptString } from '../common/crypto.util';
 
 type AppWith = Prisma.AppGetPayload<{ include: { owner: true; memberships: true } }>;
 
@@ -51,10 +53,23 @@ export class AppsService {
     return role === 'owner' || role === 'editor';
   }
 
+  /** Decrypt + parse an app's stored AI config. */
+  private aiConfigOf(app: AppWith): AppAiConfig {
+    return parseAiConfig(app.aiConfig ? decryptString(app.aiConfig) : null);
+  }
+
+  /** The definition to run: published snapshot for runners, draft for editors. */
+  private runtimeDefinition(app: AppWith, user?: AuthUser): AppDefinition {
+    const raw = !this.canEdit(app, user) && app.publishedDefinition ? app.publishedDefinition : app.definition;
+    return normalizeDefinition(JSON.parse(raw));
+  }
+
   // ---- serialization ----
 
-  private serialize(app: AppWith, user?: AuthUser) {
+  private serialize(app: AppWith, user?: AuthUser, usePublished = false) {
     const editable = this.canEdit(app, user);
+    const raw = usePublished && app.publishedDefinition ? app.publishedDefinition : app.definition;
+    const publishedHash = app.publishedDefinition || '';
     return {
       id: app.id,
       name: app.name,
@@ -62,9 +77,11 @@ export class AppsService {
       slug: app.slug,
       visibility: app.visibility,
       status: app.status,
-      definition: normalizeDefinition(JSON.parse(app.definition)),
+      version: app.version,
+      hasUnpublishedChanges: app.status === 'deployed' && app.definition !== publishedHash,
+      definition: normalizeDefinition(JSON.parse(raw)),
       // Only expose the (redacted) AI config to editors.
-      aiConfig: editable ? redactAiConfig(parseAiConfig(app.aiConfig)) : undefined,
+      aiConfig: editable ? redactAiConfig(this.aiConfigOf(app)) : undefined,
       owner: { id: app.owner.id, name: app.owner.name, email: app.owner.email },
       members: editable ? app.memberships.map((m) => ({ email: m.userEmail, role: m.role })) : undefined,
       myRole: app.ownerId === user?.id ? 'owner' : this.membershipRole(app, user?.email) ?? (editable ? 'editor' : 'viewer'),
@@ -144,7 +161,7 @@ export class AppsService {
     if (app.status !== 'deployed' && !this.canEdit(app, user)) {
       throw new ForbiddenException('This app is not deployed');
     }
-    return this.serialize(app, user);
+    return this.serialize(app, user, true);
   }
 
   // ---- mutations ----
@@ -179,8 +196,8 @@ export class AppsService {
     if (dto.description !== undefined) data.description = dto.description;
     if (dto.definition !== undefined) data.definition = JSON.stringify(normalizeDefinition(dto.definition));
     if (dto.aiConfig !== undefined) {
-      const merged = mergeAiConfig(parseAiConfig(app.aiConfig), dto.aiConfig as never);
-      data.aiConfig = JSON.stringify(merged);
+      const merged = mergeAiConfig(this.aiConfigOf(app), dto.aiConfig as never);
+      data.aiConfig = encryptString(JSON.stringify(merged));
     }
     const updated = await this.prisma.app.update({ where: { id }, data, include: this.include });
     return this.serialize(updated, user);
@@ -195,14 +212,14 @@ export class AppsService {
     return { id, deleted: true };
   }
 
+  /** Deploy = publish the current draft as a versioned snapshot served to runners. */
   async setDeployed(id: string, deployed: boolean, user: AuthUser) {
     const app = await this.getOrThrow(id);
     if (!this.canEdit(app, user)) throw new ForbiddenException('You cannot deploy this app');
-    const updated = await this.prisma.app.update({
-      where: { id },
-      data: { status: deployed ? 'deployed' : 'draft', deployedAt: deployed ? new Date() : null },
-      include: this.include,
-    });
+    const data: Prisma.AppUpdateInput = deployed
+      ? { status: 'deployed', deployedAt: new Date(), publishedDefinition: app.definition, version: { increment: 1 } }
+      : { status: 'draft' };
+    const updated = await this.prisma.app.update({ where: { id }, data, include: this.include });
     return this.serialize(updated, user);
   }
 
@@ -227,11 +244,26 @@ export class AppsService {
 
   // ---- runtime ----
 
-  async pageData(id: string, pageId: string, user?: AuthUser) {
-    const app = await this.getOrThrow(id);
+  private assertRunnable(app: AppWith, user?: AuthUser) {
     if (!this.canView(app, user)) throw new ForbiddenException('No access');
     if (app.status !== 'deployed' && !this.canEdit(app, user)) throw new ForbiddenException('Not deployed');
-    const def = normalizeDefinition(JSON.parse(app.definition));
+  }
+
+  /** All query ids referenced by the active definition — the only ones an app may run. */
+  private allowedQueryIds(def: AppDefinition): Set<string> {
+    const ids = new Set<string>();
+    for (const p of def.pages) {
+      if (p.queryId) ids.add(p.queryId);
+      if (p.chat?.queryId) ids.add(p.chat.queryId);
+      for (const a of p.actions ?? []) if (a.queryId) ids.add(a.queryId);
+    }
+    return ids;
+  }
+
+  async pageData(id: string, pageId: string, user?: AuthUser) {
+    const app = await this.getOrThrow(id);
+    this.assertRunnable(app, user);
+    const def = this.runtimeDefinition(app, user);
     const page = def.pages.find((p) => p.id === pageId);
     if (!page) throw new NotFoundException('Page not found');
     const queryId = page.queryId || page.chat?.queryId;
@@ -240,12 +272,41 @@ export class AppsService {
     return { data: result.data, meta: result.meta };
   }
 
+  /** Run a query/action referenced by the app, with parameters — powers interactive UI + write-back. */
+  async runQueryAction(
+    id: string,
+    body: { queryId?: string; action?: string; pageId?: string; params?: Record<string, unknown> },
+    user?: AuthUser,
+  ) {
+    const app = await this.getOrThrow(id);
+    this.assertRunnable(app, user);
+    const def = this.runtimeDefinition(app, user);
+
+    let queryId = body.queryId;
+    if (!queryId && body.action) {
+      const page = body.pageId ? def.pages.find((p) => p.id === body.pageId) : undefined;
+      const pages = page ? [page] : def.pages;
+      for (const p of pages) {
+        const found = (p.actions ?? []).find((a) => a.name === body.action);
+        if (found) {
+          queryId = found.queryId;
+          break;
+        }
+      }
+    }
+    if (!queryId) throw new NotFoundException('Unknown query or action');
+    if (!this.allowedQueryIds(def).has(queryId)) {
+      throw new ForbiddenException('This query is not part of the app');
+    }
+    const result = await this.queries.run(queryId, body.params);
+    return { data: result.data, meta: result.meta };
+  }
+
   async chat(id: string, pageId: string | undefined, messages: ChatMessage[], user?: AuthUser) {
     const app = await this.getOrThrow(id);
-    if (!this.canView(app, user)) throw new ForbiddenException('No access');
-    if (app.status !== 'deployed' && !this.canEdit(app, user)) throw new ForbiddenException('Not deployed');
+    this.assertRunnable(app, user);
 
-    const def = normalizeDefinition(JSON.parse(app.definition));
+    const def = this.runtimeDefinition(app, user);
     const page = pageId ? def.pages.find((p) => p.id === pageId) : def.pages.find((p) => p.type === 'chat');
     const system = page?.chat?.systemPrompt || `You are an assistant for the "${app.name}" app.`;
 
@@ -259,6 +320,6 @@ export class AppsService {
       }
     }
 
-    return this.agent.chat(parseAiConfig(app.aiConfig), system, messages, contextData);
+    return this.agent.chat(this.aiConfigOf(app), system, messages, contextData);
   }
 }

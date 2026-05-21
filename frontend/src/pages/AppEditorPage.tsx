@@ -19,7 +19,7 @@ import {
   api, AppAiConfig, AppDefinition, AppFull, AppPage, DataSource, QueryDef, Visibility,
 } from '../api/client';
 import ResultView from '../components/ResultView';
-import PreviewFrame from '../components/PreviewFrame';
+import PreviewFrame, { PreviewBridge } from '../components/PreviewFrame';
 import ChatView from '../components/ChatView';
 import AiConnectionForm from '../components/AiConnectionForm';
 import ShareSettings, { ShareMember } from '../components/ShareSettings';
@@ -27,15 +27,20 @@ import ShareSettings, { ShareMember } from '../components/ShareSettings';
 const rid = () => `page-${Math.random().toString(16).slice(2, 8)}`;
 
 // ---------------- UI page editor ----------------
-function UiPageEditor({ page, onPatch }: { page: AppPage; onPatch: (p: Partial<AppPage>) => void }) {
+function UiPageEditor({ appId, page, onPatch }: { appId: string; page: AppPage; onPatch: (p: Partial<AppPage>) => void }) {
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
   const [queries, setQueries] = useState<QueryDef[]>([]);
   const [queryId, setQueryId] = useState(page.queryId || '');
   const [result, setResult] = useState<unknown>(page.sample ? safeParse(page.sample) : null);
   const [running, setRunning] = useState(false);
   const [prompt, setPrompt] = useState(page.prompt || 'Build a clean dashboard with a table and summary of this data.');
+  const [refinePrompt, setRefinePrompt] = useState('');
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState('');
+  // local actions editor state
+  const actions = page.actions || [];
+  const [actionName, setActionName] = useState('');
+  const [actionQuery, setActionQuery] = useState('');
 
   useEffect(() => {
     api.listDataSources().then(setDataSources).catch(() => undefined);
@@ -58,17 +63,43 @@ function UiPageEditor({ page, onPatch }: { page: AppPage; onPatch: (p: Partial<A
     }
   };
 
-  const generate = async () => {
+  const generate = async (refine: boolean) => {
     setGenerating(true);
     setError('');
     try {
-      const res = await api.generateUi({ prompt, sample: JSON.stringify(result ?? null), queryName: page.name });
-      onPatch({ html: res.html, prompt, queryId: queryId || undefined });
+      const res = await api.generateUi({
+        prompt: refine ? refinePrompt : prompt,
+        sample: JSON.stringify(result ?? null),
+        queryName: page.name,
+        currentHtml: refine ? page.html : undefined,
+      });
+      onPatch({ html: res.html, prompt: refine ? prompt : prompt, queryId: queryId || undefined });
+      if (refine) setRefinePrompt('');
     } catch (e) {
       setError(api.errMessage(e));
     } finally {
       setGenerating(false);
     }
+  };
+
+  const addAction = () => {
+    if (!actionName.trim() || !actionQuery) return;
+    onPatch({ actions: [...actions, { name: actionName.trim(), queryId: actionQuery }] });
+    setActionName('');
+    setActionQuery('');
+  };
+  const removeAction = (name: string) => onPatch({ actions: actions.filter((a) => a.name !== name) });
+
+  const bridge: PreviewBridge = {
+    runQuery: (qid, params) => api.appRunQuery(appId, { queryId: qid, params }),
+    runAction: (name, params) => api.appRunQuery(appId, { action: name, pageId: page.id, params }),
+    refresh: async () => {
+      const q = queries.find((x) => x.id === queryId);
+      if (!q) return { data: result };
+      const res = await api.runInline({ dataSourceId: q.dataSourceId, config: q.config });
+      setResult(res.data);
+      return { data: res.data, meta: res.meta };
+    },
   };
 
   return (
@@ -94,15 +125,41 @@ function UiPageEditor({ page, onPatch }: { page: AppPage; onPatch: (p: Partial<A
           <Divider />
           <Typography variant="overline" color="secondary">Generate UI</Typography>
           <TextField label="Describe the UI" value={prompt} onChange={(e) => setPrompt(e.target.value)} multiline minRows={2} size="small" />
-          <Button variant="contained" color="secondary" startIcon={generating ? <CircularProgress size={16} color="inherit" /> : <AutoAwesomeIcon />} onClick={generate} disabled={generating}>
+          <Button variant="contained" color="secondary" startIcon={generating ? <CircularProgress size={16} color="inherit" /> : <AutoAwesomeIcon />} onClick={() => generate(false)} disabled={generating}>
             Generate
           </Button>
+          {page.html && (
+            <Stack direction="row" spacing={1}>
+              <TextField size="small" fullWidth label="Refine (e.g. add a bar chart)" value={refinePrompt} onChange={(e) => setRefinePrompt(e.target.value)} />
+              <Button variant="outlined" disabled={generating || !refinePrompt.trim()} onClick={() => generate(true)}>Refine</Button>
+            </Stack>
+          )}
+          <Divider />
+          <Typography variant="overline">Actions (for forms / interactivity)</Typography>
+          <Typography variant="caption" color="text.secondary">
+            Expose a query to the UI as <code>UIFactory.runAction(name, params)</code> — used for filters, lookups, and write-back.
+          </Typography>
+          {actions.map((a) => (
+            <Stack key={a.name} direction="row" alignItems="center" spacing={1}>
+              <Chip size="small" label={a.name} />
+              <Typography variant="caption" sx={{ flexGrow: 1 }}>{queries.find((q) => q.id === a.queryId)?.name || a.queryId}</Typography>
+              <IconButton size="small" onClick={() => removeAction(a.name)}><DeleteOutlineIcon fontSize="small" /></IconButton>
+            </Stack>
+          ))}
+          <Stack direction="row" spacing={1}>
+            <TextField size="small" label="Action name" value={actionName} onChange={(e) => setActionName(e.target.value)} sx={{ width: 140 }} />
+            <TextField select size="small" label="Query" value={actionQuery} onChange={(e) => setActionQuery(e.target.value)} fullWidth>
+              <MenuItem value="">Select…</MenuItem>
+              {queries.map((q) => <MenuItem key={q.id} value={q.id}>{q.name}</MenuItem>)}
+            </TextField>
+            <IconButton onClick={addAction} disabled={!actionName.trim() || !actionQuery}><AddIcon /></IconButton>
+          </Stack>
           {error && <Alert severity="error">{error}</Alert>}
         </Stack>
       </Box>
       <Box sx={{ flexGrow: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1, overflow: 'hidden', minHeight: 460 }}>
         {page.html ? (
-          <PreviewFrame html={page.html} data={result} />
+          <PreviewFrame html={page.html} data={result} bridge={bridge} />
         ) : (
           <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', color: 'text.secondary' }}>
             <Typography variant="body2">Run a query and generate a UI to preview it here.</Typography>
@@ -220,9 +277,17 @@ export default function AppEditorPage() {
 
   const toggleDeploy = async () => {
     if (!app) return;
+    if (dirty) await save();
     const updated = app.status === 'deployed' ? await api.undeployApp(id) : await api.deployApp(id);
     setApp(updated);
     setToast(updated.status === 'deployed' ? 'Deployed' : 'Undeployed');
+  };
+
+  const publishChanges = async () => {
+    if (dirty) await save();
+    const updated = await api.deployApp(id);
+    setApp(updated);
+    setToast(`Published v${updated.version}`);
   };
 
   if (!app) return <Box sx={{ display: 'grid', placeItems: 'center', py: 8 }}><CircularProgress /></Box>;
@@ -233,10 +298,16 @@ export default function AppEditorPage() {
         <IconButton onClick={() => navigate('/build')}><ArrowBackIcon /></IconButton>
         <TextField variant="standard" value={name} onChange={(e) => { setName(e.target.value); setDirty(true); }} sx={{ '& input': { fontSize: 22, fontWeight: 700 } }} />
         <Chip size="small" label={app.status} color={app.status === 'deployed' ? 'success' : 'default'} />
+        {app.status === 'deployed' && <Chip size="small" variant="outlined" label={`v${app.version}`} />}
         <Box flexGrow={1} />
         {dirty && <Chip size="small" color="warning" label="Unsaved" />}
         <Button startIcon={<SettingsIcon />} onClick={() => setSettingsOpen(true)}>Settings</Button>
         <Button variant="outlined" startIcon={<SaveIcon />} onClick={save} disabled={saving}>Save</Button>
+        {app.status === 'deployed' && (app.hasUnpublishedChanges || dirty) && (
+          <Button variant="contained" color="warning" startIcon={<RocketLaunchIcon />} onClick={publishChanges}>
+            Publish changes
+          </Button>
+        )}
         <Button variant="contained" color={app.status === 'deployed' ? 'inherit' : 'success'} startIcon={<RocketLaunchIcon />} onClick={toggleDeploy}>
           {app.status === 'deployed' ? 'Undeploy' : 'Deploy'}
         </Button>
@@ -274,7 +345,7 @@ export default function AppEditorPage() {
             <Box key={selected.id} sx={{ height: '100%' }}>
               <TextField size="small" label="Page name" value={selected.name} onChange={(e) => patchPage(selected.id, { name: e.target.value })} sx={{ mb: 2 }} />
               {selected.type === 'ui' ? (
-                <UiPageEditor page={selected} onPatch={(p) => patchPage(selected.id, p)} />
+                <UiPageEditor appId={id} page={selected} onPatch={(p) => patchPage(selected.id, p)} />
               ) : (
                 <ChatPageEditor page={selected} appId={id} saved={!dirty} onPatch={(p) => patchPage(selected.id, p)} />
               )}

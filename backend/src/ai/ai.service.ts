@@ -24,7 +24,15 @@ CONTENT GUIDANCE:
 - Array of objects -> a data table (with header row, zebra striping, and a text filter box) and/or summary cards. Add a chart if there is an obvious numeric/categorical breakdown.
 - Single object -> a labelled detail/summary view.
 - Honor the user's request about what to emphasize, which fields to show, and the layout.
-- Keep it accessible and self-contained; never reference external CSS/JS other than the allowed Chart.js CDN.`;
+- Keep it accessible and self-contained; never reference external CSS/JS other than the allowed Chart.js CDN.
+
+INTERACTIVITY (use only when the request needs it):
+- A global \`window.UIFactory\` bridge is available at runtime. Prefer it over calling fetch() directly:
+  - \`await UIFactory.runAction(name, params)\` -> runs a named server query/action (filters, search, detail lookups, or write-back like create/update/delete). Resolves to { data, meta }.
+  - \`await UIFactory.refresh()\` -> re-runs the page's primary query; the result is also pushed to any onData handler.
+  - \`UIFactory.onData(cb)\` -> cb(data) fires with the latest data (and immediately with the initial window.APP_DATA).
+  - \`UIFactory.navigate(slug)\` -> open another page of the app.
+- Forms that create/update/delete should call \`UIFactory.runAction(...)\` then \`UIFactory.refresh()\`.`;
 
 @Injectable()
 export class AiService {
@@ -55,15 +63,33 @@ export class AiService {
       };
     }
 
-    const userContent = [
-      `User request: ${dto.prompt}`,
-      dto.queryName ? `Data label: ${dto.queryName}` : '',
-      '',
-      'Here is a sample of the data. window.APP_DATA will have this exact shape at runtime:',
-      '```json',
-      truncatedSample,
-      '```',
-    ]
+    const refine = dto.currentHtml && dto.currentHtml.trim().length > 0;
+    const userContent = (
+      refine
+        ? [
+            `Apply this change to the existing app page and return the COMPLETE updated HTML document: ${dto.prompt}`,
+            dto.queryName ? `Data label: ${dto.queryName}` : '',
+            '',
+            'Current HTML:',
+            '```html',
+            dto.currentHtml!.slice(0, 60000),
+            '```',
+            '',
+            'The data shape (window.APP_DATA) is:',
+            '```json',
+            truncatedSample,
+            '```',
+          ]
+        : [
+            `User request: ${dto.prompt}`,
+            dto.queryName ? `Data label: ${dto.queryName}` : '',
+            '',
+            'Here is a sample of the data. window.APP_DATA will have this exact shape at runtime:',
+            '```json',
+            truncatedSample,
+            '```',
+          ]
+    )
       .filter(Boolean)
       .join('\n');
 

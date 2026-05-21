@@ -36,6 +36,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refresh();
   }, [refresh]);
 
+  // The API client emits this when a request returns 401 (expired session).
+  useEffect(() => {
+    const onUnauthorized = () => setUser(null);
+    window.addEventListener('uifactory:unauthorized', onUnauthorized);
+    return () => window.removeEventListener('uifactory:unauthorized', onUnauthorized);
+  }, []);
+
   const value = useMemo<AuthState>(
     () => ({ user, config, loading, refresh, logout, isAdmin: user?.role === 'admin' }),
     [user, config, loading, refresh, logout],

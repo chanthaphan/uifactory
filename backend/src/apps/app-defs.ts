@@ -14,6 +14,8 @@ export interface AppPage {
   sample?: string;
   // chat pages
   chat?: { systemPrompt?: string; queryId?: string; greeting?: string };
+  // named queries the page's UI may invoke (interactive reads + write-back)
+  actions?: { name: string; queryId: string }[];
 }
 
 export interface AppDefinition {

@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Post, Put } from '@nestjs/common';
 import { AppsService } from './apps.service';
-import { ChatDto, CreateAppDto, SharingDto, UpdateAppDto } from './dto/app.dto';
+import { ChatDto, CreateAppDto, RunQueryDto, SharingDto, UpdateAppDto } from './dto/app.dto';
 import { CurrentUser, Public } from '../auth/auth.decorators';
 import { AuthUser } from '../auth/auth.types';
 
@@ -63,6 +63,12 @@ export class AppsController {
   @Get(':id/pages/:pageId/data')
   pageData(@Param('id') id: string, @Param('pageId') pageId: string, @CurrentUser() user?: AuthUser) {
     return this.service.pageData(id, pageId, user);
+  }
+
+  @Public()
+  @Post(':id/run-query')
+  runQuery(@Param('id') id: string, @Body() dto: RunQueryDto, @CurrentUser() user?: AuthUser) {
+    return this.service.runQueryAction(id, dto, user);
   }
 
   @Public()

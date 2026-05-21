@@ -13,6 +13,10 @@ export class CreateDataSourceDto {
 
   @IsObject()
   config!: Record<string, unknown>;
+
+  @IsOptional()
+  @IsIn(['private', 'org'])
+  visibility?: 'private' | 'org';
 }
 
 export class UpdateDataSourceDto {
@@ -28,4 +32,8 @@ export class UpdateDataSourceDto {
   @IsOptional()
   @IsObject()
   config?: Record<string, unknown>;
+
+  @IsOptional()
+  @IsIn(['private', 'org'])
+  visibility?: 'private' | 'org';
 }

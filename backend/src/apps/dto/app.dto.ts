@@ -71,3 +71,21 @@ export class ChatDto {
   @Type(() => ChatMessageDto)
   messages!: ChatMessageDto[];
 }
+
+export class RunQueryDto {
+  @IsOptional()
+  @IsString()
+  queryId?: string;
+
+  @IsOptional()
+  @IsString()
+  action?: string;
+
+  @IsOptional()
+  @IsString()
+  pageId?: string;
+
+  @IsOptional()
+  @IsObject()
+  params?: Record<string, unknown>;
+}

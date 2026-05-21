@@ -230,12 +230,15 @@ ORDER BY revenue DESC;`,
       },
     ],
   };
+  const sampleDefJson = JSON.stringify(sampleAppDef);
   await prisma.app.create({
     data: {
       name: 'Orders Operations',
       description: 'Sample multi-page app: an orders dashboard plus an AI assistant.',
       slug: slugify('Orders Operations'),
-      definition: JSON.stringify(sampleAppDef),
+      definition: sampleDefJson,
+      publishedDefinition: sampleDefJson,
+      version: 1,
       visibility: 'org',
       status: 'deployed',
       deployedAt: new Date(),

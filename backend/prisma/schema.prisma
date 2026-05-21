@@ -24,13 +24,15 @@ model User {
 
 /// A connection to an external data source (REST API, PostgreSQL, or SQLite file).
 model DataSource {
-  id        String   @id @default(cuid())
-  name      String
-  type      String // REST | POSTGRES | SQLITE
-  config    String // JSON
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  queries   Query[]
+  id         String   @id @default(cuid())
+  name       String
+  type       String // REST | POSTGRES | SQLITE
+  config     String // encrypted JSON
+  ownerId    String?
+  visibility String   @default("org") // private | org
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  queries    Query[]
 }
 
 /// A saved query/request that runs against a DataSource.
@@ -40,26 +42,29 @@ model Query {
   dataSourceId String
   dataSource   DataSource @relation(fields: [dataSourceId], references: [id], onDelete: Cascade)
   config       String // JSON
+  ownerId      String?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 }
 
 /// A multi-page app built on the platform.
 model App {
-  id          String          @id @default(cuid())
-  name        String
-  description String?
-  slug        String          @unique
-  definition  String // JSON: { pages: [...], theme? }
-  aiConfig    String? // JSON: per-app AI/agent connection (provider key or external agent-api)
-  visibility  String          @default("private") // private | org | public
-  status      String          @default("draft") // draft | deployed
-  ownerId     String
-  owner       User            @relation("OwnerApps", fields: [ownerId], references: [id])
-  deployedAt  DateTime?
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
-  memberships AppMembership[]
+  id                 String          @id @default(cuid())
+  name               String
+  description        String?
+  slug               String          @unique
+  definition         String // JSON draft: { pages: [...], theme? }
+  publishedDefinition String? // JSON snapshot served to runners
+  version            Int             @default(0)
+  aiConfig           String? // encrypted JSON: per-app AI/agent connection
+  visibility         String          @default("private") // private | org | public
+  status             String          @default("draft") // draft | deployed
+  ownerId            String
+  owner              User            @relation("OwnerApps", fields: [ownerId], references: [id])
+  deployedAt         DateTime?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  memberships        AppMembership[]
 }
 
 /// Per-app collaborator role. Keyed by email so org members can be added before they log in.

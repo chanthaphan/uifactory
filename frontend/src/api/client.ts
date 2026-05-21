@@ -2,6 +2,19 @@ import axios from 'axios';
 
 const http = axios.create({ baseURL: '/api', withCredentials: true });
 
+// When the session expires, notify the app shell so it can show the login screen.
+http.interceptors.response.use(
+  (r) => r,
+  (error) => {
+    const url: string = error?.config?.url || '';
+    const isAuthCall = url.includes('/auth/');
+    if (axios.isAxiosError(error) && error.response?.status === 401 && !isAuthCall) {
+      window.dispatchEvent(new CustomEvent('uifactory:unauthorized'));
+    }
+    return Promise.reject(error);
+  },
+);
+
 // ---- shared types ----
 export type DataSourceType = 'REST' | 'POSTGRES' | 'SQLITE';
 export type Role = 'admin' | 'member';
@@ -75,6 +88,7 @@ export interface AppPage {
   queryId?: string;
   sample?: string;
   chat?: { systemPrompt?: string; queryId?: string; greeting?: string };
+  actions?: { name: string; queryId: string }[];
 }
 export interface AppDefinition {
   pages: AppPage[];
@@ -112,6 +126,8 @@ export interface AppFull {
   slug: string;
   visibility: Visibility;
   status: 'draft' | 'deployed';
+  version: number;
+  hasUnpublishedChanges: boolean;
   definition: AppDefinition;
   aiConfig?: AppAiConfig;
   owner: { id: string; name: string; email: string };
@@ -204,7 +220,7 @@ export const api = {
 
   // ai
   aiStatus: () => http.get<AiStatus>('/ai/status').then((r) => r.data),
-  generateUi: (body: { prompt: string; sample: string; queryName?: string }) =>
+  generateUi: (body: { prompt: string; sample: string; queryName?: string; currentHtml?: string }) =>
     http.post<GenerateUiResult>('/ai/generate-ui', body).then((r) => r.data),
 
   // apps
@@ -223,6 +239,8 @@ export const api = {
     http.put<AppFull>(`/apps/${id}/sharing`, body).then((r) => r.data),
   appPageData: (id: string, pageId: string) =>
     http.get<{ data: unknown; meta?: unknown }>(`/apps/${id}/pages/${pageId}/data`).then((r) => r.data),
+  appRunQuery: (id: string, body: { queryId?: string; action?: string; pageId?: string; params?: Record<string, unknown> }) =>
+    http.post<{ data: unknown; meta?: unknown }>(`/apps/${id}/run-query`, body).then((r) => r.data),
   chat: (id: string, body: { pageId?: string; messages: ChatMessage[] }) =>
     http.post<{ reply: string; source: string }>(`/apps/${id}/chat`, body).then((r) => r.data),
 };

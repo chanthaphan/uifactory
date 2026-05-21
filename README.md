@@ -18,6 +18,12 @@ SSO login ─▶ build app (UI + chat pages, bound to data) ─▶ deploy ─▶
 - **Multi-page apps** — each app has pages you navigate between:
   - **UI pages**: AI-generated dashboards/tables bound to a query (rendered from live `window.APP_DATA`).
   - **Chat pages**: a conversational assistant, optionally grounded on a query's data.
+- **Interactive UIs & write-back** — generated pages get a `window.UIFactory` bridge to run
+  parameterized queries, refresh, navigate between pages, and submit forms that **write back**
+  (INSERT/UPDATE/DELETE / POST). Apps may only run queries they explicitly reference.
+- **Versioned publish** — editing happens on a draft; **Deploy/Publish** snapshots a version that
+  runners see. The editor flags unpublished changes; re-publish to roll the live version forward.
+- **Iterative AI editing** — refine a generated page with follow-up instructions ("add a bar chart").
 - **Per-app AI / agent connection** — each app brings its own key. Point a chat (or any UI) at the
   platform's default LLM, **this app's own provider key** (Claude / OpenAI / Azure OpenAI), or an
   **external agent API** (your own endpoint). Falls back to a mock reply when nothing is configured.
@@ -109,13 +115,25 @@ backend/    NestJS API: auth, users, org, templates, settings, datasources, quer
 frontend/   React + Vite: Login, Catalog, Build (multi-page editor), Data Sources, Admin, App runner
 ```
 
+## Security
+
+- **Tenant isolation** — data sources & queries are scoped to their owner (or `org`-shared); members
+  can't see, run, or delete others' private connections.
+- **Secrets at rest** — data source configs and per-app AI/agent keys are AES-256-GCM encrypted
+  (`SECRETS_KEY`) and redacted in API responses.
+- **SSRF protection** — REST/agent/LLM URLs that resolve to private/reserved IPs are blocked
+  (`ALLOW_PRIVATE_NETWORK` / `OUTBOUND_ALLOWLIST` to override).
+- **Query allowlist** — at runtime an app can only execute the queries referenced in its definition;
+  parameters are bound (no string interpolation into SQL).
+- **Session handling** — the SPA redirects to login automatically when the session expires.
+
 ## Notes & limitations
 
 - Apps execute the SQL / HTTP / agent calls you configure — intended for trusted internal use.
-- Generated UI renders in a sandboxed iframe (scripts run, opaque origin) and reads `window.APP_DATA`,
-  so re-running the bound query refreshes the UI without regeneration.
+- Generated UI renders in a sandboxed iframe (scripts run, opaque origin) and talks to the host only
+  through the `window.UIFactory` postMessage bridge — it can't call the API or read cookies directly.
 - Real Azure AD sign-in and Microsoft Graph require a tenant + network access; the dev mock auth and
   a local fake org directory cover local development end-to-end.
-- Per-app AI keys are stored (encrypted-at-rest is **not** configured in this MVP) and redacted in API
-  responses; treat the database as sensitive in production.
+- The DB schema is managed with `prisma db push` (no migration history yet); a Postgres connection is
+  opened per query (no pooling). Both are reasonable next steps for production.
 ```

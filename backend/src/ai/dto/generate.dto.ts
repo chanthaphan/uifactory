@@ -14,4 +14,9 @@ export class GenerateUiDto {
   @IsOptional()
   @IsString()
   queryName?: string;
+
+  /** When set, refine this existing HTML according to the prompt instead of generating from scratch. */
+  @IsOptional()
+  @IsString()
+  currentHtml?: string;
 }
