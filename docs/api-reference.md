@@ -2,8 +2,10 @@
 
 All routes are under the `/api` prefix. Auth is a cookie JWT session (set by login). Legend:
 **(public)** = no session required (the current user is still attached if present);
-**(admin)** = requires the platform `admin` role; everything else requires a signed-in member with the
-appropriate per-app role.
+**(admin)** = requires the platform `admin` role;
+**(builder)** = requires `admin` or `member` (app authoring — viewers are blocked);
+everything else requires a signed-in user with the appropriate per-app role.
+Role/permission failures return **403**; missing/expired session on a non-public route returns **401**.
 
 ## Health
 
@@ -71,29 +73,34 @@ appropriate per-app role.
 | GET | `/apps/catalog` | deployed apps you may run |
 | GET | `/apps/by-slug/:slug` | (public) run a deployed (or your draft) app |
 | GET | `/apps/:id` | full app (editors see redacted AI config + members) |
-| POST | `/apps` | create `{ name, description?, templateId? }` |
-| PUT | `/apps/:id` | update `{ name?, description?, definition?, aiConfig? }` |
-| DELETE | `/apps/:id` | owner/admin only |
-| POST | `/apps/:id/deploy` | publish a new version `{ note? }` (enforces the deploy cap) |
-| POST | `/apps/:id/undeploy` | back to draft |
-| GET | `/apps/:id/versions` | version history |
-| POST | `/apps/:id/rollback` | `{ version }` → restore that version into the draft |
-| PUT | `/apps/:id/sharing` | `{ visibility, members[] }` |
+| POST | `/apps` | (builder) create `{ name, description?, templateId? }` |
+| PUT | `/apps/:id` | (builder) update `{ name?, description?, definition?, aiConfig? }` |
+| DELETE | `/apps/:id` | (builder) owner/admin only |
+| POST | `/apps/:id/deploy` | (builder) publish a new version `{ note? }` (enforces the deploy cap) |
+| POST | `/apps/:id/undeploy` | (builder) back to draft |
+| GET | `/apps/:id/versions` | (builder) version history |
+| POST | `/apps/:id/rollback` | (builder) `{ version }` → restore that version into the draft |
+| PUT | `/apps/:id/sharing` | (builder) `{ visibility, members[] }` |
 | GET | `/apps/:id/pages/:pageId/data` | (public) the page's bound-query result |
-| POST | `/apps/:id/run-query` | (public) run a page query/action `{ queryId?/action?, pageId?, params? }` |
-| POST | `/apps/:id/generate-ui` | app-scoped generation via the app's agent / provider key / platform LLM |
+| POST | `/apps/:id/run-query` | (public) run a page query/action `{ queryId?/action?, pageId?, params? }` (scoped to the page's connectors) |
+| POST | `/apps/:id/generate-ui` | (builder) app-scoped generation via the app's provider key / platform LLM |
 | POST | `/apps/:id/chat` | (public) one chat turn `{ pageId?, conversationId?, persist?, messages[] }` |
 | POST | `/apps/:id/chat/stream` | (public) streaming chat; newline-delimited JSON (`{delta}` … `{done,source,conversationId}`) |
 
-### Data sources — `/apps/:appId/datasources`
+### Data sources (connectors) — `/apps/:appId/datasources`
+
+`type` is `REST | POSTGRES | SQLITE | MSGRAPH | AGENT`. Config is **validated per type** on
+create/update/test; updates **merge-preserve** secret fields left masked. (These are the "connectors" of
+the editor UI.)
 
 | Method | Path | Notes |
 | ------ | ---- | ----- |
 | GET | `/` | list (configs redacted) |
-| POST | `/` | create `{ name, type, config, authMode? }` |
-| POST | `/test` | test an inline config without saving |
-| POST | `/from-connector/:connectorId` | clone a prebuilt connector `{ name? }` |
-| GET / PUT / DELETE | `/:id` | read / update / delete |
+| POST | `/` | (builder) create `{ name, type, config, authMode? }` |
+| POST | `/test` | (builder) test an inline config without saving (REST probes the endpoint) |
+| POST | `/from-connector/:connectorId` | (builder) clone a prebuilt connector `{ name? }` |
+| GET | `/:id` | read (config redacted) |
+| PUT / DELETE | `/:id` | (builder) update / delete |
 | POST | `/:id/test` | test a saved source |
 
 ### Queries — `/apps/:appId/queries`
@@ -126,11 +133,11 @@ appropriate per-app role.
 
 | Model | Purpose |
 | ----- | ------- |
-| `User` | platform user (auto-provisioned on first SSO/dev login); `role` admin/member |
+| `User` | platform user (auto-provisioned on first SSO/dev login); `role` admin / member (builder) / viewer (default for new users) |
 | `App` | a deployable app: `definition` (draft JSON), `publishedDefinition`, `version`, `aiConfig` (encrypted), `visibility`, `status` |
 | `AppVersion` | immutable snapshot captured on each publish (enables rollback) |
 | `AppMembership` | per-app role (owner / editor / viewer), keyed by email |
-| `DataSource` | per-app connection; `type`, encrypted `config`, `authMode` (shared / per-user) |
+| `DataSource` | per-app connection (a "connector"); `type` (REST/POSTGRES/SQLITE/MSGRAPH/AGENT), encrypted `config`, `authMode` (shared / per-user) |
 | `UserCredential` | a user's encrypted secret for a per-user data source |
 | `Query` | a saved SQL/REST/Graph request against a data source |
 | `Template` | a clonable starter app bundle (definition + data sources + queries) |
@@ -149,8 +156,9 @@ appropriate per-app role.
       "layout": { "components": [ … ] }, // drag-and-drop source (compiled to html)
       "editorMode": "ai|canvas|code",
       "queryId": "…",                    // bound query → window.APP_DATA
+      "dataSourceIds": ["…"],            // optional: connectors this page may use (empty = all)
       "actions": [ { "name": "…", "queryId": "…" } ],
-      "chat": { "systemPrompt": "…", "greeting": "…", "queryId": "…" }
+      "chat": { "systemPrompt": "…", "greeting": "…", "queryId": "…", "agentDataSourceId": "…" } // agentDataSourceId → an AGENT connector responder
     }
   ],
   "theme": { "brandName": "…", "brandColor": "#…", "logo": "…" },
@@ -159,5 +167,6 @@ appropriate per-app role.
 }
 ```
 
-> The schema is managed with `prisma db push` (no migration history yet). Per-page query isolation,
-> rate limits, and other guardrails are enforced server-side — see [configuration.md](configuration.md).
+> The schema is managed with `prisma db push` (no migration history yet). Per-page connector scoping +
+> query allowlist, builder-only authoring, rate limits, and other guardrails are enforced server-side —
+> see [configuration.md](configuration.md).
