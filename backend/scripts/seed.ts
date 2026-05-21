@@ -3,6 +3,9 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { PrismaClient } from '@prisma/client';
+import { randomBytes } from 'node:crypto';
+import { buildFallbackHtml } from '../src/ai/fallback-generator';
+import { slugify, AppDefinition } from '../src/apps/app-defs';
 
 const prisma = new PrismaClient();
 
@@ -96,9 +99,20 @@ async function main() {
   console.log(`  -> ${sampleDbPath}`);
 
   console.log('Resetting UIFactory metadata…');
+  await prisma.appMembership.deleteMany();
   await prisma.app.deleteMany();
+  await prisma.template.deleteMany();
   await prisma.query.deleteMany();
   await prisma.dataSource.deleteMany();
+  await prisma.setting.deleteMany();
+  await prisma.user.deleteMany();
+
+  console.log('Creating users…');
+  const admin = await prisma.user.create({
+    data: { email: 'admin@uifactory.local', name: 'Platform Admin', role: 'admin' },
+  });
+  await prisma.user.create({ data: { email: 'alice@uifactory.local', name: 'Alice Member', role: 'member' } });
+  await prisma.user.create({ data: { email: 'bob@uifactory.local', name: 'Bob Member', role: 'member' } });
 
   // Built-in SQLite data source (works out of the box).
   const sqliteDs = await prisma.dataSource.create({
@@ -118,51 +132,124 @@ async function main() {
     },
   });
 
-  await prisma.query.createMany({
-    data: [
-      {
-        name: 'Recent orders with customer + product',
-        dataSourceId: sqliteDs.id,
-        config: JSON.stringify({
-          sql: `SELECT o.id, c.name AS customer, p.name AS product, o.quantity, o.total, o.status, o.ordered_at
+  const ordersQuery = await prisma.query.create({
+    data: {
+      name: 'Recent orders with customer + product',
+      dataSourceId: sqliteDs.id,
+      config: JSON.stringify({
+        sql: `SELECT o.id, c.name AS customer, p.name AS product, o.quantity, o.total, o.status, o.ordered_at
 FROM orders o
 JOIN customers c ON c.id = o.customer_id
 JOIN products p ON p.id = o.product_id
 ORDER BY o.ordered_at DESC
 LIMIT 25;`,
-        }),
-      },
-      {
-        name: 'Revenue by product category',
-        dataSourceId: sqliteDs.id,
-        config: JSON.stringify({
-          sql: `SELECT p.category, COUNT(*) AS orders, ROUND(SUM(o.total), 2) AS revenue
+      }),
+    },
+  });
+  const revenueQuery = await prisma.query.create({
+    data: {
+      name: 'Revenue by product category',
+      dataSourceId: sqliteDs.id,
+      config: JSON.stringify({
+        sql: `SELECT p.category, COUNT(*) AS orders, ROUND(SUM(o.total), 2) AS revenue
 FROM orders o JOIN products p ON p.id = o.product_id
 GROUP BY p.category
 ORDER BY revenue DESC;`,
-        }),
-      },
-      {
-        name: 'All customers',
-        dataSourceId: sqliteDs.id,
-        config: JSON.stringify({ sql: 'SELECT * FROM customers ORDER BY created_at DESC;' }),
-      },
-      {
-        name: 'GET /users',
-        dataSourceId: restDs.id,
-        config: JSON.stringify({ method: 'GET', path: '/users' }),
-      },
-      {
-        name: 'GET /posts',
-        dataSourceId: restDs.id,
-        config: JSON.stringify({ method: 'GET', path: '/posts' }),
-      },
-    ],
+      }),
+    },
+  });
+  await prisma.query.create({
+    data: {
+      name: 'All customers',
+      dataSourceId: sqliteDs.id,
+      config: JSON.stringify({ sql: 'SELECT * FROM customers ORDER BY created_at DESC;' }),
+    },
+  });
+  await prisma.query.create({
+    data: { name: 'GET /users', dataSourceId: restDs.id, config: JSON.stringify({ method: 'GET', path: '/users' }) },
+  });
+  await prisma.query.create({
+    data: { name: 'GET /posts', dataSourceId: restDs.id, config: JSON.stringify({ method: 'GET', path: '/posts' }) },
   });
 
+  console.log('Creating templates…');
+  const ordersSample = JSON.stringify([
+    { id: 40, customer: 'Wayne Enterprises', product: 'Coffee Subscription', quantity: 4, total: 236, status: 'refunded' },
+    { id: 39, customer: 'Stark Manufacturing', product: 'Laptop Pro 16', quantity: 3, total: 7197, status: 'shipped' },
+  ]);
+  const ordersHtml = buildFallbackHtml('Orders dashboard with a sortable, filterable table', ordersSample, 'Orders');
+
+  const pid = () => `page-${randomBytes(3).toString('hex')}`;
+
+  const dashboardTemplateDef: AppDefinition = {
+    pages: [
+      { id: pid(), name: 'Orders', slug: 'orders', type: 'ui', queryId: ordersQuery.id, prompt: 'Orders dashboard table', html: ordersHtml, sample: ordersSample },
+    ],
+  };
+  const assistantTemplateDef: AppDefinition = {
+    pages: [
+      {
+        id: pid(),
+        name: 'Assistant',
+        slug: 'assistant',
+        type: 'chat',
+        chat: { systemPrompt: 'You are a helpful business analyst.', greeting: 'Hi! How can I help you today?' },
+      },
+    ],
+  };
+
+  await prisma.template.create({
+    data: {
+      name: 'Orders Dashboard',
+      description: 'A data table bound to a SQL query.',
+      category: 'Dashboard',
+      definition: JSON.stringify(dashboardTemplateDef),
+      createdById: admin.id,
+    },
+  });
+  await prisma.template.create({
+    data: {
+      name: 'Support Assistant',
+      description: 'A conversational chat UI.',
+      category: 'Chat',
+      definition: JSON.stringify(assistantTemplateDef),
+      createdById: admin.id,
+    },
+  });
+
+  console.log('Creating a sample deployed app…');
+  const sampleAppDef: AppDefinition = {
+    pages: [
+      { id: pid(), name: 'Orders', slug: 'orders', type: 'ui', queryId: ordersQuery.id, prompt: 'Orders dashboard table', html: ordersHtml, sample: ordersSample },
+      {
+        id: pid(),
+        name: 'Assistant',
+        slug: 'assistant',
+        type: 'chat',
+        chat: { systemPrompt: 'You are a business analyst for the Orders app. Answer using the revenue data.', queryId: revenueQuery.id, greeting: 'Ask me about revenue by category.' },
+      },
+    ],
+  };
+  await prisma.app.create({
+    data: {
+      name: 'Orders Operations',
+      description: 'Sample multi-page app: an orders dashboard plus an AI assistant.',
+      slug: slugify('Orders Operations'),
+      definition: JSON.stringify(sampleAppDef),
+      visibility: 'org',
+      status: 'deployed',
+      deployedAt: new Date(),
+      ownerId: admin.id,
+      memberships: { create: [{ userEmail: admin.email, role: 'owner' }] },
+    },
+  });
+
+  await prisma.setting.create({ data: { key: 'platformName', value: JSON.stringify('UIFactory') } });
+
   console.log('Seed complete:');
-  console.log('  - 2 data sources (SQLite + REST)');
-  console.log('  - 5 example queries');
+  console.log('  - 3 users (1 admin, 2 members)');
+  console.log('  - 2 data sources (SQLite + REST), 5 queries');
+  console.log('  - 2 templates, 1 deployed sample app');
 }
 
 main()

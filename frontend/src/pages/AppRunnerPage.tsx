@@ -1,83 +1,92 @@
 import { useEffect, useState } from 'react';
-import { AppBar, Box, Button, Chip, CircularProgress, IconButton, Toolbar, Typography } from '@mui/material';
+import { AppBar, Box, CircularProgress, IconButton, Tab, Tabs, Toolbar, Typography } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import RefreshIcon from '@mui/icons-material/Refresh';
 import { useNavigate, useParams } from 'react-router-dom';
-import { api, AppDef } from '../api/client';
+import { api, AppFull, AppPage } from '../api/client';
 import PreviewFrame from '../components/PreviewFrame';
+import ChatView from '../components/ChatView';
 
-export default function AppRunnerPage() {
-  const { id = '' } = useParams();
-  const navigate = useNavigate();
-  const [app, setApp] = useState<AppDef | null>(null);
-  const [data, setData] = useState<unknown>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [live, setLive] = useState(false);
-
-  async function load() {
-    setLoading(true);
-    setError('');
-    try {
-      const a = await api.getApp(id);
-      setApp(a);
-      // Prefer live data from the bound query; fall back to the stored snapshot.
-      if (a.definition.queryId) {
-        try {
-          const res = await api.getAppData(id);
-          setData(res.data);
-          setLive(res.data != null);
-        } catch {
-          setData(a.definition.sample ? JSON.parse(a.definition.sample) : null);
-          setLive(false);
-        }
-      } else {
-        setData(a.definition.sample ? JSON.parse(a.definition.sample) : null);
-        setLive(false);
-      }
-    } catch (e) {
-      setError(api.errMessage(e));
-    } finally {
-      setLoading(false);
-    }
-  }
+function UiPageRunner({ appId, page }: { appId: string; page: AppPage }) {
+  const [data, setData] = useState<unknown>(page.sample ? safeParse(page.sample) : null);
+  const [loading, setLoading] = useState(!!page.queryId);
 
   useEffect(() => {
-    load();
-  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+    let cancelled = false;
+    if (page.queryId) {
+      setLoading(true);
+      api
+        .appPageData(appId, page.id)
+        .then((res) => !cancelled && setData(res.data))
+        .catch(() => undefined)
+        .finally(() => !cancelled && setLoading(false));
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [appId, page.id, page.queryId]);
+
+  if (!page.html) {
+    return <Box sx={{ display: 'grid', placeItems: 'center', height: '100%', color: 'text.secondary' }}>This page has no content yet.</Box>;
+  }
+  if (loading) {
+    return <Box sx={{ display: 'grid', placeItems: 'center', height: '100%' }}><CircularProgress /></Box>;
+  }
+  return <PreviewFrame html={page.html} data={data} height="100%" />;
+}
+
+export default function AppRunnerPage() {
+  const { slug = '' } = useParams();
+  const navigate = useNavigate();
+  const [app, setApp] = useState<AppFull | null>(null);
+  const [error, setError] = useState('');
+  const [tab, setTab] = useState(0);
+
+  useEffect(() => {
+    api.getAppBySlug(slug).then(setApp).catch((e) => setError(api.errMessage(e)));
+  }, [slug]);
+
+  if (error) {
+    return (
+      <Box sx={{ p: 6, textAlign: 'center' }}>
+        <Typography color="error" gutterBottom>{error}</Typography>
+        <IconButton onClick={() => navigate('/')}><ArrowBackIcon /></IconButton>
+      </Box>
+    );
+  }
+  if (!app) return <Box sx={{ height: '100vh', display: 'grid', placeItems: 'center' }}><CircularProgress /></Box>;
+
+  const page = app.definition.pages[tab];
 
   return (
-    <Box sx={{ height: 'calc(100vh - 64px)', display: 'flex', flexDirection: 'column' }}>
+    <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <AppBar position="static" color="default" elevation={0} sx={{ borderBottom: '1px solid', borderColor: 'divider', bgcolor: '#fff' }}>
         <Toolbar variant="dense">
-          <IconButton edge="start" onClick={() => navigate('/apps')}>
-            <ArrowBackIcon />
-          </IconButton>
-          <Typography variant="subtitle1" fontWeight={700} sx={{ flexGrow: 1 }}>
-            {app?.name ?? 'App'}
-          </Typography>
-          <Chip size="small" sx={{ mr: 1 }} label={live ? 'Live data' : 'Snapshot'} color={live ? 'success' : 'default'} />
-          {app?.definition.queryId && (
-            <Button size="small" startIcon={<RefreshIcon />} onClick={load}>
-              Refresh
-            </Button>
-          )}
+          <IconButton edge="start" onClick={() => navigate('/')}><ArrowBackIcon /></IconButton>
+          <Typography variant="subtitle1" fontWeight={700} sx={{ mr: 3 }}>{app.name}</Typography>
+          <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" sx={{ minHeight: 48 }}>
+            {app.definition.pages.map((p) => (
+              <Tab key={p.id} label={p.name} sx={{ minHeight: 48 }} />
+            ))}
+          </Tabs>
         </Toolbar>
       </AppBar>
-
-      <Box sx={{ flexGrow: 1, position: 'relative' }}>
-        {loading && (
-          <Box sx={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center' }}>
-            <CircularProgress />
-          </Box>
+      <Box sx={{ flexGrow: 1, overflow: 'hidden' }}>
+        {!page ? (
+          <Box sx={{ display: 'grid', placeItems: 'center', height: '100%', color: 'text.secondary' }}>This app has no pages.</Box>
+        ) : page.type === 'chat' ? (
+          <ChatView appId={app.id} pageId={page.id} greeting={page.chat?.greeting} />
+        ) : (
+          <UiPageRunner appId={app.id} page={page} />
         )}
-        {error && (
-          <Box sx={{ p: 4 }}>
-            <Typography color="error">{error}</Typography>
-          </Box>
-        )}
-        {!loading && app?.definition.html && <PreviewFrame html={app.definition.html} data={data} height="100%" />}
       </Box>
     </Box>
   );
+}
+
+function safeParse(s: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
 }

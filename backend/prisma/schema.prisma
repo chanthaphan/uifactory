@@ -7,12 +7,27 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// A platform user, auto-provisioned on first SSO (or dev) login.
+model User {
+  id          String          @id @default(cuid())
+  email       String          @unique
+  name        String
+  oid         String?         @unique // Azure AD object id
+  role        String          @default("member") // admin | member
+  active      Boolean         @default(true)
+  avatarUrl   String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  apps        App[]           @relation("OwnerApps")
+  memberships AppMembership[]
+}
+
 /// A connection to an external data source (REST API, PostgreSQL, or SQLite file).
 model DataSource {
   id        String   @id @default(cuid())
   name      String
   type      String // REST | POSTGRES | SQLITE
-  config    String // JSON: REST -> {baseUrl, headers}; POSTGRES -> {connectionString}; SQLITE -> {file}
+  config    String // JSON
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   queries   Query[]
@@ -24,16 +39,56 @@ model Query {
   name         String
   dataSourceId String
   dataSource   DataSource @relation(fields: [dataSourceId], references: [id], onDelete: Cascade)
-  config       String // JSON: REST -> {method, path, headers, body}; SQL -> {sql}
+  config       String // JSON
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 }
 
-/// A saved app: a generated UI bound to a query, persisted so it can be re-opened and run with live data.
+/// A multi-page app built on the platform.
 model App {
-  id         String   @id @default(cuid())
-  name       String
-  definition String // JSON: {html, queryId?, prompt?, sample?}
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id          String          @id @default(cuid())
+  name        String
+  description String?
+  slug        String          @unique
+  definition  String // JSON: { pages: [...], theme? }
+  aiConfig    String? // JSON: per-app AI/agent connection (provider key or external agent-api)
+  visibility  String          @default("private") // private | org | public
+  status      String          @default("draft") // draft | deployed
+  ownerId     String
+  owner       User            @relation("OwnerApps", fields: [ownerId], references: [id])
+  deployedAt  DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  memberships AppMembership[]
+}
+
+/// Per-app collaborator role. Keyed by email so org members can be added before they log in.
+model AppMembership {
+  id        String   @id @default(cuid())
+  appId     String
+  app       App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  userEmail String
+  role      String // owner | editor | viewer
+  user      User?    @relation(fields: [userEmail], references: [email])
+  createdAt DateTime @default(now())
+
+  @@unique([appId, userEmail])
+}
+
+/// A starter app definition that members can clone into a new app.
+model Template {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  category    String?
+  definition  String // JSON app definition seed
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+/// Platform-wide settings editable by admins (non-secret).
+model Setting {
+  key   String @id
+  value String // JSON
 }

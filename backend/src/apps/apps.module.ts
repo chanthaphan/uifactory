@@ -1,11 +1,12 @@
 import { Module } from '@nestjs/common';
 import { AppsController } from './apps.controller';
 import { AppsService } from './apps.service';
+import { AgentService } from './agent.service';
 import { QueriesModule } from '../queries/queries.module';
 
 @Module({
   imports: [QueriesModule],
   controllers: [AppsController],
-  providers: [AppsService],
+  providers: [AppsService, AgentService],
 })
 export class AppsModule {}
