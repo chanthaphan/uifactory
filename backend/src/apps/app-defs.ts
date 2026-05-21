@@ -21,6 +21,8 @@ export interface AppPage {
 export interface AppDefinition {
   pages: AppPage[];
   theme?: Record<string, unknown>;
+  /** When false, only editors/owner/admin may run write (mutation) actions. Default: allow. */
+  allowWriteActions?: boolean;
 }
 
 export type AiMode = 'platform' | 'provider' | 'agent-api';
@@ -59,7 +61,11 @@ export function slugify(name: string): string {
 export function normalizeDefinition(raw: unknown): AppDefinition {
   const def = (raw ?? {}) as Record<string, unknown>;
   if (Array.isArray(def.pages)) {
-    return { pages: def.pages as AppPage[], theme: def.theme as Record<string, unknown> | undefined };
+    return {
+      pages: def.pages as AppPage[],
+      theme: def.theme as Record<string, unknown> | undefined,
+      allowWriteActions: def.allowWriteActions as boolean | undefined,
+    };
   }
   // Legacy: { html, queryId?, prompt?, sample? } -> one ui page.
   if (typeof def.html === 'string') {
