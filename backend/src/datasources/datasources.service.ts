@@ -6,30 +6,11 @@ import { CreateDataSourceDto, UpdateDataSourceDto } from './dto/datasource.dto';
 import { DataSourceType } from '../execution/execution.types';
 import { AuthUser } from '../auth/auth.types';
 import { decryptString, encryptString } from '../common/crypto.util';
+import { redactConfig } from '../common/redact.util';
+import { LIMITS } from '../common/limits';
+import { BadRequestException } from '@nestjs/common';
 
-const SENSITIVE_KEYS = ['connectionString', 'password', 'authorization', 'apiKey', 'token'];
-
-function redactConfig(config: Record<string, unknown>): Record<string, unknown> {
-  const clone: Record<string, unknown> = { ...config };
-  for (const key of Object.keys(clone)) {
-    if (SENSITIVE_KEYS.some((s) => key.toLowerCase() === s.toLowerCase()) && typeof clone[key] === 'string') {
-      const val = clone[key] as string;
-      clone[key] = val.length > 6 ? `${val.slice(0, 3)}***${val.slice(-2)}` : '***';
-    }
-  }
-  if (clone.headers && typeof clone.headers === 'object') {
-    const headers = { ...(clone.headers as Record<string, string>) };
-    for (const h of Object.keys(headers)) {
-      if (h.toLowerCase() === 'authorization' || h.toLowerCase().includes('key') || h.toLowerCase().includes('token')) {
-        headers[h] = '***';
-      }
-    }
-    clone.headers = headers;
-  }
-  return clone;
-}
-
-type DsRow = { id: string; name: string; type: string; config: string; appId: string; createdAt: Date; updatedAt: Date };
+type DsRow = { id: string; name: string; type: string; config: string; authMode: string; appId: string; createdAt: Date; updatedAt: Date };
 
 @Injectable()
 export class DataSourcesService {
@@ -49,10 +30,41 @@ export class DataSourcesService {
       name: ds.name,
       type: ds.type as DataSourceType,
       config: redactConfig(this.parseConfig(ds)),
+      authMode: ds.authMode,
       appId: ds.appId,
       createdAt: ds.createdAt,
       updatedAt: ds.updatedAt,
     };
+  }
+
+  /** Merge a per-user credential over the shared config (headers are deep-merged). */
+  private mergeConfig(base: Record<string, unknown>, over: Record<string, unknown>): Record<string, unknown> {
+    const merged = { ...base, ...over };
+    const baseHeaders = (base.headers as Record<string, string>) || undefined;
+    const overHeaders = (over.headers as Record<string, string>) || undefined;
+    if (baseHeaders || overHeaders) merged.headers = { ...(baseHeaders || {}), ...(overHeaders || {}) };
+    return merged;
+  }
+
+  /**
+   * Raw config for execution, resolving the *caller's* credential when the data source is per-user.
+   * Throws a clear error when a per-user credential is required but missing.
+   */
+  async getRawForUser(id: string, userId?: string) {
+    const row = await this.prisma.dataSource.findUnique({ where: { id } });
+    if (!row) throw new NotFoundException(`Data source ${id} not found`);
+    let parsedConfig = this.parseConfig(row);
+    if (row.authMode === 'per-user') {
+      if (!userId) {
+        throw new ForbiddenException('This data source uses per-user credentials. Sign in and connect your account to use it.');
+      }
+      const cred = await this.prisma.userCredential.findUnique({ where: { userId_dataSourceId: { userId, dataSourceId: id } } });
+      if (!cred) {
+        throw new ForbiddenException(`Connect your account for "${row.name}" to use this data.`);
+      }
+      parsedConfig = this.mergeConfig(parsedConfig, JSON.parse(decryptString(cred.config)) as Record<string, unknown>);
+    }
+    return { ...row, parsedConfig, type: row.type as DataSourceType };
   }
 
   async findAll(appId: string, user: AuthUser) {
@@ -75,10 +87,36 @@ export class DataSourcesService {
     return { ...row, parsedConfig: this.parseConfig(row), type: row.type as DataSourceType };
   }
 
+  private async assertDataSourceCapacity(appId: string) {
+    const count = await this.prisma.dataSource.count({ where: { appId } });
+    if (count >= LIMITS.maxDataSourcesPerApp) {
+      throw new BadRequestException(`This app already has the maximum of ${LIMITS.maxDataSourcesPerApp} data sources.`);
+    }
+  }
+
   async create(appId: string, dto: CreateDataSourceDto, user: AuthUser) {
     await this.access.assertCanEdit(appId, user);
+    await this.assertDataSourceCapacity(appId);
     const row = await this.prisma.dataSource.create({
-      data: { name: dto.name, type: dto.type, config: encryptString(JSON.stringify(dto.config)), appId },
+      data: { name: dto.name, type: dto.type, config: encryptString(JSON.stringify(dto.config)), authMode: dto.authMode || 'shared', appId },
+    });
+    return this.serialize(row);
+  }
+
+  /** Clone an admin-curated prebuilt connector into a new per-app data source. */
+  async createFromConnector(appId: string, connectorId: string, name: string | undefined, user: AuthUser) {
+    await this.access.assertCanEdit(appId, user);
+    await this.assertDataSourceCapacity(appId);
+    const connector = await this.prisma.connector.findUnique({ where: { id: connectorId } });
+    if (!connector) throw new NotFoundException(`Connector ${connectorId} not found`);
+    const row = await this.prisma.dataSource.create({
+      data: {
+        name: name?.trim() || connector.name,
+        type: connector.type,
+        // Re-encrypt under the same key (the stored connector config is already encrypted plaintext).
+        config: encryptString(decryptString(connector.config)),
+        appId,
+      },
     });
     return this.serialize(row);
   }
@@ -91,6 +129,7 @@ export class DataSourcesService {
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.type !== undefined) data.type = dto.type;
     if (dto.config !== undefined) data.config = encryptString(JSON.stringify(dto.config));
+    if (dto.authMode !== undefined) data.authMode = dto.authMode;
     const updated = await this.prisma.dataSource.update({ where: { id }, data });
     return this.serialize(updated);
   }

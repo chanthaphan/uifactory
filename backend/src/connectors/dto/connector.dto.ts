@@ -3,27 +3,39 @@ import { DataSourceType } from '../../execution/execution.types';
 
 const TYPES: DataSourceType[] = ['REST', 'POSTGRES', 'SQLITE', 'MSGRAPH'];
 
-export class CreateDataSourceDto {
+export class CreateConnectorDto {
   @IsString()
   @MinLength(1)
   name!: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  category?: string;
 
   @IsIn(TYPES)
   type!: DataSourceType;
 
   @IsObject()
   config!: Record<string, unknown>;
-
-  @IsOptional()
-  @IsIn(['shared', 'per-user'])
-  authMode?: 'shared' | 'per-user';
 }
 
-export class UpdateDataSourceDto {
+export class UpdateConnectorDto {
   @IsOptional()
   @IsString()
   @MinLength(1)
   name?: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  category?: string;
 
   @IsOptional()
   @IsIn(TYPES)
@@ -32,8 +44,4 @@ export class UpdateDataSourceDto {
   @IsOptional()
   @IsObject()
   config?: Record<string, unknown>;
-
-  @IsOptional()
-  @IsIn(['shared', 'per-user'])
-  authMode?: 'shared' | 'per-user';
 }

@@ -59,7 +59,25 @@ const BRIDGE_SCRIPT = `<script>
     downloadCSV: function(filename, rows){ return call('download', [filename || 'export.csv', toCsv(rows), 'text/csv']); },
     copyToClipboard: function(text){ return call('copyToClipboard', [String(text)]); },
     storeValue: function(key, value){ return call('storeValue', [key, value]); },
-    getValue: function(key){ return call('getValue', [key]); }
+    getValue: function(key){ return call('getValue', [key]); },
+    // read a user-selected file (input element or File); resolves to { name, type, size, dataUrl, text }
+    readFile: function(fileOrInput){
+      var file = fileOrInput;
+      if (fileOrInput && fileOrInput.files) file = fileOrInput.files[0];
+      return new Promise(function(resolve, reject){
+        if (!file){ reject(new Error('No file selected')); return; }
+        var meta = { name: file.name, type: file.type, size: file.size, dataUrl: null, text: null };
+        var isText = /^text\\/|json|csv|xml|javascript|svg/.test(file.type) || /\\.(txt|csv|json|md|xml|svg|html?)$/i.test(file.name||'');
+        var rdr = new FileReader();
+        rdr.onerror = function(){ reject(new Error('Could not read file')); };
+        rdr.onload = function(){
+          meta.dataUrl = rdr.result;
+          if (isText){ var tr = new FileReader(); tr.onload = function(){ meta.text = tr.result; resolve(meta); }; tr.onerror = function(){ resolve(meta); }; tr.readAsText(file); }
+          else resolve(meta);
+        };
+        rdr.readAsDataURL(file);
+      });
+    }
   };
 })();
 </script>`;

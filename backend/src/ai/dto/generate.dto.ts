@@ -19,4 +19,14 @@ export class GenerateUiDto {
   @IsOptional()
   @IsString()
   currentHtml?: string;
+
+  /** Optional API/data guidance (method, endpoint shape, field meanings) to steer how the UI uses the data. */
+  @IsOptional()
+  @IsString()
+  dataGuidance?: string;
+
+  /** App-level build guidelines (AGENTS.md/CLAUDE.md style) to enforce conventions during generation. */
+  @IsOptional()
+  @IsString()
+  guidelines?: string;
 }

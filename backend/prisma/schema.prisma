@@ -18,23 +18,42 @@ model User {
   avatarUrl   String?
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
-  apps        App[]           @relation("OwnerApps")
-  memberships AppMembership[]
+  apps          App[]            @relation("OwnerApps")
+  memberships   AppMembership[]
+  conversations Conversation[]
+  credentials   UserCredential[]
 }
 
 /// A connection to an external data source, owned by a single app.
 model DataSource {
-  id        String   @id @default(cuid())
-  name      String
-  type      String // REST | POSTGRES | SQLITE | MSGRAPH
-  config    String // encrypted JSON
-  appId     String
-  app       App      @relation(fields: [appId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  queries   Query[]
+  id          String           @id @default(cuid())
+  name        String
+  type        String // REST | POSTGRES | SQLITE | MSGRAPH
+  config      String // encrypted JSON (shared/non-secret parts when authMode = per-user)
+  authMode    String           @default("shared") // shared | per-user
+  appId       String
+  app         App              @relation(fields: [appId], references: [id], onDelete: Cascade)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  queries     Query[]
+  credentials UserCredential[]
 
   @@index([appId])
+}
+
+/// A single user's own secret for a per-user data source (e.g. their DB login or API token).
+model UserCredential {
+  id           String     @id @default(cuid())
+  userId       String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dataSourceId String
+  dataSource   DataSource @relation(fields: [dataSourceId], references: [id], onDelete: Cascade)
+  config       String // encrypted JSON: the per-user secret fields, merged over the shared config
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@unique([userId, dataSourceId])
+  @@index([dataSourceId])
 }
 
 /// A saved query/request that runs against a DataSource, owned by a single app.
@@ -72,6 +91,64 @@ model App {
   memberships         AppMembership[]
   dataSources         DataSource[]
   queries             Query[]
+  versions            AppVersion[]
+  conversations       Conversation[]
+}
+
+/// A persisted chat thread for a signed-in user on a specific chat page.
+model Conversation {
+  id        String    @id @default(cuid())
+  appId     String
+  app       App       @relation(fields: [appId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pageId    String? // chat page id within the app definition
+  title     String    @default("New chat")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  messages  Message[]
+
+  @@index([appId, userId, pageId])
+}
+
+/// A single message within a Conversation.
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String // user | assistant
+  content        String
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId])
+}
+
+/// An immutable snapshot of an app definition, captured on each publish — enables rollback.
+model AppVersion {
+  id          String   @id @default(cuid())
+  appId       String
+  app         App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  version     Int
+  definition  String // JSON snapshot of the published definition
+  note        String?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@unique([appId, version])
+  @@index([appId])
+}
+
+/// A platform-wide, admin-curated data-source connection that any app can clone in ("prebuilt connector").
+model Connector {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  category    String?
+  type        String // REST | POSTGRES | SQLITE | MSGRAPH
+  config      String // encrypted JSON (same shape as a DataSource config)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 /// Per-app collaborator role. Keyed by email so org members can be added before they log in.

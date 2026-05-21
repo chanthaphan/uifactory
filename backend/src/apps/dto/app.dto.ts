@@ -1,4 +1,4 @@
-import { IsArray, IsIn, IsObject, IsOptional, IsString, MinLength, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsIn, IsObject, IsOptional, IsString, MinLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateAppDto {
@@ -65,6 +65,16 @@ export class ChatDto {
   @IsOptional()
   @IsString()
   pageId?: string;
+
+  /** Conversation thread id (a persisted thread for signed-in users, or a client session id). */
+  @IsOptional()
+  @IsString()
+  conversationId?: string;
+
+  /** When true and the caller is signed in, persist this thread to the platform database. */
+  @IsOptional()
+  @IsBoolean()
+  persist?: boolean;
 
   @IsArray()
   @ValidateNested({ each: true })

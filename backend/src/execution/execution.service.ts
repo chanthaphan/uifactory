@@ -9,6 +9,7 @@ import {
   ExecutionResult,
   MsGraphQueryConfig,
   PostgresConfig,
+  RequestIdentity,
   RestConfig,
   RestQueryConfig,
   SqliteConfig,
@@ -29,17 +30,20 @@ export class ExecutionService {
     dsConfig: Record<string, unknown>,
     queryConfig: Record<string, unknown>,
     params?: Record<string, unknown>,
+    identity?: RequestIdentity,
   ): Promise<ExecutionResult> {
     const started = Date.now();
+    // Server-trusted {{user_*}} values take precedence over any client-supplied param of the same name.
+    const p = identity ? { ...(params || {}), ...identity.context } : params;
     switch (type) {
       case 'REST':
-        return this.runRest(dsConfig as unknown as RestConfig, queryConfig as unknown as RestQueryConfig, started, params);
+        return this.runRest(dsConfig as unknown as RestConfig, queryConfig as unknown as RestQueryConfig, started, p, identity);
       case 'POSTGRES':
-        return this.runPostgres(dsConfig as unknown as PostgresConfig, queryConfig as unknown as SqlQueryConfig, started, params);
+        return this.runPostgres(dsConfig as unknown as PostgresConfig, queryConfig as unknown as SqlQueryConfig, started, p);
       case 'SQLITE':
-        return this.runSqlite(dsConfig as unknown as SqliteConfig, queryConfig as unknown as SqlQueryConfig, started, params);
+        return this.runSqlite(dsConfig as unknown as SqliteConfig, queryConfig as unknown as SqlQueryConfig, started, p);
       case 'MSGRAPH':
-        return this.runGraph(queryConfig as unknown as MsGraphQueryConfig, started, params);
+        return this.runGraph(queryConfig as unknown as MsGraphQueryConfig, started, p);
       default:
         throw new BadRequestException(`Unsupported data source type: ${type}`);
     }
@@ -121,7 +125,7 @@ export class ExecutionService {
     }
   }
 
-  private async runRest(ds: RestConfig, q: RestQueryConfig, started: number, params?: Record<string, unknown>): Promise<ExecutionResult> {
+  private async runRest(ds: RestConfig, q: RestQueryConfig, started: number, params?: Record<string, unknown>, identity?: RequestIdentity): Promise<ExecutionResult> {
     if (!ds.baseUrl) throw new BadRequestException('REST data source requires a baseUrl');
     const base = ds.baseUrl.replace(/\/+$/, '');
     const path = this.fill((q.path || '').trim(), params);
@@ -136,12 +140,17 @@ export class ExecutionService {
       }
     }
 
+    const headers: Record<string, string> = { ...(ds.headers || {}), ...(q.headers || {}) };
+    if (ds.forwardIdentity && identity?.assertion) {
+      headers[(ds.identityHeader || 'X-UIFactory-User').trim()] = identity.assertion;
+    }
+
     await assertSafeUrl(url);
     try {
       const res = await axios.request({
         url,
         method: q.method || 'GET',
-        headers: { ...(ds.headers || {}), ...(q.headers || {}) },
+        headers,
         data: body,
         timeout: REQUEST_TIMEOUT_MS,
         validateStatus: () => true,

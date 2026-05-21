@@ -1,6 +1,8 @@
-import { Body, Controller, Delete, Get, Param, Post, Put } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Res } from '@nestjs/common';
+import { Response } from 'express';
 import { AppsService } from './apps.service';
 import { ChatDto, CreateAppDto, RunQueryDto, SharingDto, UpdateAppDto } from './dto/app.dto';
+import { GenerateUiDto } from '../ai/dto/generate.dto';
 import { CurrentUser, Public } from '../auth/auth.decorators';
 import { AuthUser } from '../auth/auth.types';
 
@@ -45,13 +47,23 @@ export class AppsController {
   }
 
   @Post(':id/deploy')
-  deploy(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.service.setDeployed(id, true, user);
+  deploy(@Param('id') id: string, @Body() body: { note?: string }, @CurrentUser() user: AuthUser) {
+    return this.service.setDeployed(id, true, user, body?.note);
   }
 
   @Post(':id/undeploy')
   undeploy(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.service.setDeployed(id, false, user);
+  }
+
+  @Get(':id/versions')
+  versions(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.service.listVersions(id, user);
+  }
+
+  @Post(':id/rollback')
+  rollback(@Param('id') id: string, @Body() body: { version: number }, @CurrentUser() user: AuthUser) {
+    return this.service.rollback(id, Number(body?.version), user);
   }
 
   @Put(':id/sharing')
@@ -71,9 +83,39 @@ export class AppsController {
     return this.service.runQueryAction(id, dto, user);
   }
 
+  @Post(':id/generate-ui')
+  generateUi(@Param('id') id: string, @Body() dto: GenerateUiDto, @CurrentUser() user: AuthUser) {
+    return this.service.generateUi(id, dto, user);
+  }
+
   @Public()
   @Post(':id/chat')
   chat(@Param('id') id: string, @Body() dto: ChatDto, @CurrentUser() user?: AuthUser) {
-    return this.service.chat(id, dto.pageId, dto.messages, user);
+    return this.service.chat(id, dto.pageId, dto.messages, user, dto.conversationId, dto.persist);
+  }
+
+  /** Streaming chat: writes newline-delimited JSON ({ delta } chunks, then { done, source }). */
+  @Public()
+  @Post(':id/chat/stream')
+  async chatStream(@Param('id') id: string, @Body() dto: ChatDto, @Res() res: Response, @CurrentUser() user?: AuthUser) {
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('X-Accel-Buffering', 'no');
+    try {
+      const { source, conversationId } = await this.service.chatStream(
+        id,
+        dto.pageId,
+        dto.messages,
+        (delta) => res.write(JSON.stringify({ delta }) + '\n'),
+        user,
+        dto.conversationId,
+        dto.persist,
+      );
+      res.write(JSON.stringify({ done: true, source, conversationId }) + '\n');
+    } catch (err) {
+      res.write(JSON.stringify({ error: (err as Error).message || 'Chat failed' }) + '\n');
+    } finally {
+      res.end();
+    }
   }
 }

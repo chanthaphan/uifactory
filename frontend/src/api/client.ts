@@ -47,13 +47,21 @@ export interface PlatformSettings {
   defaultVisibility: Visibility;
 }
 
+export type DataSourceAuthMode = 'shared' | 'per-user';
 export interface DataSource {
   id: string;
   name: string;
   type: DataSourceType;
   config: Record<string, unknown>;
+  authMode?: DataSourceAuthMode;
   createdAt: string;
   updatedAt: string;
+}
+export interface AppCredentialStatus {
+  dataSourceId: string;
+  name: string;
+  type: DataSourceType;
+  hasCredential: boolean;
 }
 export interface QueryDef {
   id: string;
@@ -67,7 +75,7 @@ export interface ExecutionResult {
 }
 export interface GenerateUiResult {
   html: string;
-  source: 'ai' | 'fallback';
+  source: 'ai' | 'agent-api' | 'fallback';
   provider?: AiProviderName;
   model?: string;
   note?: string;
@@ -76,6 +84,20 @@ export interface AiStatus {
   configured: boolean;
   provider: AiProviderName | null;
   model: string | null;
+}
+
+export type EditorMode = 'ai' | 'canvas' | 'code';
+export type ComponentType =
+  | 'heading' | 'text' | 'metric' | 'table' | 'chart'
+  | 'button' | 'textInput' | 'fileUpload' | 'image' | 'divider' | 'container';
+export interface UiComponent {
+  id: string;
+  type: ComponentType;
+  props: Record<string, unknown>;
+  children?: UiComponent[];
+}
+export interface CanvasLayout {
+  components: UiComponent[];
 }
 
 export interface AppPage {
@@ -87,13 +109,35 @@ export interface AppPage {
   prompt?: string;
   queryId?: string;
   sample?: string;
+  layout?: CanvasLayout;
+  editorMode?: EditorMode;
   chat?: { systemPrompt?: string; queryId?: string; greeting?: string };
   actions?: { name: string; queryId: string }[];
+}
+export interface AppVersion {
+  id: string;
+  version: number;
+  note?: string | null;
+  createdBy?: string | null;
+  createdAt: string;
+  pageCount: number;
+  isCurrent: boolean;
+}
+export interface Connector {
+  id: string;
+  name: string;
+  description?: string | null;
+  category?: string | null;
+  type: DataSourceType;
+  config: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
 }
 export interface AppDefinition {
   pages: AppPage[];
   theme?: Record<string, unknown>;
   allowWriteActions?: boolean;
+  buildGuidelines?: string;
 }
 export interface AppAiConfig {
   mode: 'platform' | 'provider' | 'agent-api';
@@ -163,6 +207,19 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
 }
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  pageId?: string | null;
+  messageCount: number;
+  updatedAt: string;
+}
+export interface ConversationDetail {
+  id: string;
+  title: string;
+  pageId?: string | null;
+  messages: { role: 'user' | 'assistant'; content: string }[];
+}
 
 function errMessage(e: unknown): string {
   if (axios.isAxiosError(e)) {
@@ -204,10 +261,17 @@ export const api = {
 
   // data sources (per-app)
   listDataSources: (appId: string) => http.get<DataSource[]>(`/apps/${appId}/datasources`).then((r) => r.data),
-  createDataSource: (appId: string, body: { name: string; type: DataSourceType; config: Record<string, unknown> }) =>
+  createDataSource: (appId: string, body: { name: string; type: DataSourceType; config: Record<string, unknown>; authMode?: DataSourceAuthMode }) =>
     http.post<DataSource>(`/apps/${appId}/datasources`, body).then((r) => r.data),
-  updateDataSource: (appId: string, id: string, body: { name?: string; type?: DataSourceType; config?: Record<string, unknown> }) =>
+  updateDataSource: (appId: string, id: string, body: { name?: string; type?: DataSourceType; config?: Record<string, unknown>; authMode?: DataSourceAuthMode }) =>
     http.put<DataSource>(`/apps/${appId}/datasources/${id}`, body).then((r) => r.data),
+
+  // per-user credentials (each user supplies their own secret for a per-user data source)
+  listAppCredentials: (appId: string) => http.get<AppCredentialStatus[]>(`/apps/${appId}/credentials`).then((r) => r.data),
+  setCredential: (appId: string, dataSourceId: string, config: Record<string, unknown>) =>
+    http.put<{ dataSourceId: string; hasCredential: boolean }>(`/apps/${appId}/credentials/${dataSourceId}`, { config }).then((r) => r.data),
+  deleteCredential: (appId: string, dataSourceId: string) =>
+    http.delete(`/apps/${appId}/credentials/${dataSourceId}`).then((r) => r.data),
   deleteDataSource: (appId: string, id: string) => http.delete(`/apps/${appId}/datasources/${id}`).then((r) => r.data),
   testDataSource: (appId: string, id: string) =>
     http.post<{ ok: boolean; message: string }>(`/apps/${appId}/datasources/${id}/test`).then((r) => r.data),
@@ -225,10 +289,21 @@ export const api = {
   runInline: (appId: string, body: { dataSourceId: string; config: Record<string, unknown> }) =>
     http.post<ExecutionResult>(`/apps/${appId}/queries/run`, body).then((r) => r.data),
 
+  // connectors (prebuilt, admin-curated)
+  listConnectors: () => http.get<Connector[]>('/connectors').then((r) => r.data),
+  createConnector: (body: { name: string; description?: string; category?: string; type: DataSourceType; config: Record<string, unknown> }) =>
+    http.post<Connector>('/connectors', body).then((r) => r.data),
+  updateConnector: (id: string, body: Partial<{ name: string; description: string; category: string; type: DataSourceType; config: Record<string, unknown> }>) =>
+    http.put<Connector>(`/connectors/${id}`, body).then((r) => r.data),
+  deleteConnector: (id: string) => http.delete(`/connectors/${id}`).then((r) => r.data),
+  addConnectorToApp: (appId: string, connectorId: string, name?: string) =>
+    http.post<DataSource>(`/apps/${appId}/datasources/from-connector/${connectorId}`, { name }).then((r) => r.data),
+
   // ai
   aiStatus: () => http.get<AiStatus>('/ai/status').then((r) => r.data),
-  generateUi: (body: { prompt: string; sample: string; queryName?: string; currentHtml?: string }) =>
-    http.post<GenerateUiResult>('/ai/generate-ui', body).then((r) => r.data),
+  /** App-scoped generation: uses the app's agent API / provider key / platform LLM + build guidelines. */
+  generateUi: (appId: string, body: { prompt: string; sample: string; queryName?: string; currentHtml?: string; dataGuidance?: string; guidelines?: string }) =>
+    http.post<GenerateUiResult>(`/apps/${appId}/generate-ui`, body).then((r) => r.data),
 
   // apps
   listMyApps: () => http.get<AppSummary[]>('/apps').then((r) => r.data),
@@ -240,14 +315,65 @@ export const api = {
   updateApp: (id: string, body: { name?: string; description?: string; definition?: AppDefinition; aiConfig?: AppAiConfig }) =>
     http.put<AppFull>(`/apps/${id}`, body).then((r) => r.data),
   deleteApp: (id: string) => http.delete(`/apps/${id}`).then((r) => r.data),
-  deployApp: (id: string) => http.post<AppFull>(`/apps/${id}/deploy`).then((r) => r.data),
+  deployApp: (id: string, note?: string) => http.post<AppFull>(`/apps/${id}/deploy`, { note }).then((r) => r.data),
   undeployApp: (id: string) => http.post<AppFull>(`/apps/${id}/undeploy`).then((r) => r.data),
+  listVersions: (id: string) => http.get<AppVersion[]>(`/apps/${id}/versions`).then((r) => r.data),
+  rollbackApp: (id: string, version: number) => http.post<AppFull>(`/apps/${id}/rollback`, { version }).then((r) => r.data),
   setSharing: (id: string, body: { visibility: Visibility; members: { email: string; role: 'editor' | 'viewer' }[] }) =>
     http.put<AppFull>(`/apps/${id}/sharing`, body).then((r) => r.data),
   appPageData: (id: string, pageId: string) =>
     http.get<{ data: unknown; meta?: unknown }>(`/apps/${id}/pages/${pageId}/data`).then((r) => r.data),
   appRunQuery: (id: string, body: { queryId?: string; action?: string; pageId?: string; params?: Record<string, unknown> }) =>
     http.post<{ data: unknown; meta?: unknown }>(`/apps/${id}/run-query`, body).then((r) => r.data),
-  chat: (id: string, body: { pageId?: string; messages: ChatMessage[] }) =>
-    http.post<{ reply: string; source: string }>(`/apps/${id}/chat`, body).then((r) => r.data),
+  // chat history (per-user threads, signed-in only)
+  listConversations: (appId: string, pageId?: string) =>
+    http.get<ConversationSummary[]>(`/apps/${appId}/conversations`, { params: pageId ? { pageId } : {} }).then((r) => r.data),
+  getConversation: (appId: string, conversationId: string) =>
+    http.get<ConversationDetail>(`/apps/${appId}/conversations/${conversationId}`).then((r) => r.data),
+  deleteConversation: (appId: string, conversationId: string) =>
+    http.delete(`/apps/${appId}/conversations/${conversationId}`).then((r) => r.data),
+
+  chat: (id: string, body: { pageId?: string; messages: ChatMessage[]; conversationId?: string; persist?: boolean }) =>
+    http.post<{ reply: string; source: string; conversationId?: string }>(`/apps/${id}/chat`, body).then((r) => r.data),
+
+  /** Streaming chat: calls onDelta with each text chunk; resolves with the responder source + thread id. */
+  chatStream: async (
+    id: string,
+    body: { pageId?: string; messages: ChatMessage[]; conversationId?: string; persist?: boolean },
+    onDelta: (text: string) => void,
+  ): Promise<{ source?: string; conversationId?: string }> => {
+    const res = await fetch(`/api/apps/${id}/chat/stream`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 401) {
+      window.dispatchEvent(new CustomEvent('uifactory:unauthorized'));
+      throw new Error('Session expired');
+    }
+    if (!res.ok || !res.body) throw new Error(`Chat failed (${res.status})`);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let source: string | undefined;
+    let conversationId: string | undefined;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (!line) continue;
+        const obj = JSON.parse(line) as { delta?: string; done?: boolean; source?: string; error?: string; conversationId?: string };
+        if (obj.error) throw new Error(obj.error);
+        if (obj.delta) onDelta(obj.delta);
+        if (obj.source) source = obj.source;
+        if (obj.conversationId) conversationId = obj.conversationId;
+      }
+    }
+    return { source, conversationId };
+  },
 };

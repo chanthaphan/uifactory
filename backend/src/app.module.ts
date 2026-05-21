@@ -11,6 +11,9 @@ import { DataSourcesModule } from './datasources/datasources.module';
 import { QueriesModule } from './queries/queries.module';
 import { AiModule } from './ai/ai.module';
 import { AppsModule } from './apps/apps.module';
+import { ConnectorsModule } from './connectors/connectors.module';
+import { ConversationsModule } from './conversations/conversations.module';
+import { CredentialsModule } from './credentials/credentials.module';
 import { HealthController } from './health.controller';
 
 @Module({
@@ -27,6 +30,9 @@ import { HealthController } from './health.controller';
     QueriesModule,
     AiModule,
     AppsModule,
+    ConnectorsModule,
+    ConversationsModule,
+    CredentialsModule,
   ],
   controllers: [HealthController],
 })

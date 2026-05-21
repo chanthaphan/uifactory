@@ -23,6 +23,16 @@ export class DataSourcesController {
     return this.service.create(appId, dto, user);
   }
 
+  @Post('from-connector/:connectorId')
+  createFromConnector(
+    @Param('appId') appId: string,
+    @Param('connectorId') connectorId: string,
+    @Body() body: { name?: string },
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.service.createFromConnector(appId, connectorId, body?.name, user);
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.service.findOne(id, user);

@@ -2,6 +2,35 @@ import { randomBytes } from 'node:crypto';
 
 export type PageType = 'ui' | 'chat';
 
+/** How a UI page is currently being authored. The runtime always renders `html`. */
+export type EditorMode = 'ai' | 'canvas' | 'code';
+
+export type ComponentType =
+  | 'heading'
+  | 'text'
+  | 'metric'
+  | 'table'
+  | 'chart'
+  | 'button'
+  | 'textInput'
+  | 'fileUpload'
+  | 'image'
+  | 'divider'
+  | 'container';
+
+/** A node in the drag-and-drop component tree. `props` is type-specific and free-form. */
+export interface UiComponent {
+  id: string;
+  type: ComponentType;
+  props: Record<string, unknown>;
+  children?: UiComponent[];
+}
+
+/** The source of a drag-and-drop authored page; compiled to `html` for the runtime. */
+export interface CanvasLayout {
+  components: UiComponent[];
+}
+
 export interface AppPage {
   id: string;
   name: string;
@@ -12,6 +41,10 @@ export interface AppPage {
   prompt?: string;
   queryId?: string;
   sample?: string;
+  /** Drag-and-drop component tree (when authored with the visual builder). */
+  layout?: CanvasLayout;
+  /** Remembers which editor the page was last authored in. */
+  editorMode?: EditorMode;
   // chat pages
   chat?: { systemPrompt?: string; queryId?: string; greeting?: string };
   // named queries the page's UI may invoke (interactive reads + write-back)
@@ -23,6 +56,8 @@ export interface AppDefinition {
   theme?: Record<string, unknown>;
   /** When false, only editors/owner/admin may run write (mutation) actions. Default: allow. */
   allowWriteActions?: boolean;
+  /** AGENTS.md/CLAUDE.md-style build guidelines fed to the AI/agent for generation and chat. */
+  buildGuidelines?: string;
 }
 
 export type AiMode = 'platform' | 'provider' | 'agent-api';
@@ -65,6 +100,7 @@ export function normalizeDefinition(raw: unknown): AppDefinition {
       pages: def.pages as AppPage[],
       theme: def.theme as Record<string, unknown> | undefined,
       allowWriteActions: def.allowWriteActions as boolean | undefined,
+      buildGuidelines: def.buildGuidelines as string | undefined,
     };
   }
   // Legacy: { html, queryId?, prompt?, sample? } -> one ui page.

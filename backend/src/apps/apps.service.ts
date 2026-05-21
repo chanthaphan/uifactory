@@ -1,8 +1,14 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { QueriesService } from '../queries/queries.service';
 import { AgentService, ChatMessage } from './agent.service';
+import { AiService, GenerateUiResult } from '../ai/ai.service';
+import { GenerateUiDto } from '../ai/dto/generate.dto';
+import { ConversationsService } from '../conversations/conversations.service';
+import { LIMITS, countWords } from '../common/limits';
+import { RateLimiter } from '../common/rate-limiter';
+import { buildIdentity } from '../common/identity.util';
 import { AuthUser } from '../auth/auth.types';
 import { CreateAppDto, SharingDto, UpdateAppDto } from './dto/app.dto';
 import {
@@ -28,9 +34,19 @@ export class AppsService {
     private readonly prisma: PrismaService,
     private readonly queries: QueriesService,
     private readonly agent: AgentService,
+    private readonly ai: AiService,
+    private readonly conversations: ConversationsService,
   ) {}
 
   private include = { owner: true, memberships: true } as const;
+  private readonly genLimiter = new RateLimiter(LIMITS.aiGenerateRatePerMin, 60_000);
+  private readonly chatLimiter = new RateLimiter(LIMITS.chatRatePerMin, 60_000);
+
+  private assertRate(limiter: RateLimiter, key: string, what: string) {
+    if (!limiter.check(key)) {
+      throw new HttpException(`Rate limit exceeded for ${what}. Please slow down and try again shortly.`, HttpStatus.TOO_MANY_REQUESTS);
+    }
+  }
 
   // ---- access control ----
 
@@ -225,7 +241,13 @@ export class AppsService {
     const data: Prisma.AppUpdateInput = {};
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.description !== undefined) data.description = dto.description;
-    if (dto.definition !== undefined) data.definition = JSON.stringify(normalizeDefinition(dto.definition));
+    if (dto.definition !== undefined) {
+      const normalized = normalizeDefinition(dto.definition);
+      if (normalized.pages.length > LIMITS.maxPagesPerApp) {
+        throw new BadRequestException(`Too many pages: ${normalized.pages.length} (max ${LIMITS.maxPagesPerApp}).`);
+      }
+      data.definition = JSON.stringify(normalized);
+    }
     if (dto.aiConfig !== undefined) {
       const merged = mergeAiConfig(this.aiConfigOf(app), dto.aiConfig as never);
       data.aiConfig = encryptString(JSON.stringify(merged));
@@ -244,13 +266,66 @@ export class AppsService {
   }
 
   /** Deploy = publish the current draft as a versioned snapshot served to runners. */
-  async setDeployed(id: string, deployed: boolean, user: AuthUser) {
+  async setDeployed(id: string, deployed: boolean, user: AuthUser, note?: string) {
     const app = await this.getOrThrow(id);
     if (!this.canEdit(app, user)) throw new ForbiddenException('You cannot deploy this app');
-    const data: Prisma.AppUpdateInput = deployed
-      ? { status: 'deployed', deployedAt: new Date(), publishedDefinition: app.definition, version: { increment: 1 } }
-      : { status: 'draft' };
-    const updated = await this.prisma.app.update({ where: { id }, data, include: this.include });
+    if (!deployed) {
+      const updated = await this.prisma.app.update({ where: { id }, data: { status: 'draft' }, include: this.include });
+      return this.serialize(updated, user);
+    }
+    // Cap how many apps a single owner can have deployed at once (viewing remains unlimited).
+    if (app.status !== 'deployed') {
+      const deployedCount = await this.prisma.app.count({ where: { ownerId: app.ownerId, status: 'deployed' } });
+      if (deployedCount >= LIMITS.maxDeployedAppsPerUser) {
+        throw new ForbiddenException(`Deploy limit reached: ${LIMITS.maxDeployedAppsPerUser} deployed apps per user. Undeploy another app first.`);
+      }
+    }
+    const nextVersion = app.version + 1;
+    const [, updated] = await this.prisma.$transaction([
+      this.prisma.appVersion.create({
+        data: { appId: id, version: nextVersion, definition: app.definition, note: note?.trim() || null, createdById: user.id },
+      }),
+      this.prisma.app.update({
+        where: { id },
+        data: { status: 'deployed', deployedAt: new Date(), publishedDefinition: app.definition, version: nextVersion },
+        include: this.include,
+      }),
+    ]);
+    return this.serialize(updated, user);
+  }
+
+  /** Version history for the editor's rollback UI (editors only). */
+  async listVersions(id: string, user: AuthUser) {
+    const app = await this.getOrThrow(id);
+    if (!this.canEdit(app, user)) throw new ForbiddenException('You cannot view versions for this app');
+    const rows = await this.prisma.appVersion.findMany({ where: { appId: id }, orderBy: { version: 'desc' } });
+    const creatorIds = [...new Set(rows.map((r) => r.createdById).filter((x): x is string => !!x))];
+    const creators = creatorIds.length
+      ? await this.prisma.user.findMany({ where: { id: { in: creatorIds } }, select: { id: true, name: true, email: true } })
+      : [];
+    const nameById = new Map(creators.map((c) => [c.id, c.name || c.email]));
+    return rows.map((r) => ({
+      id: r.id,
+      version: r.version,
+      note: r.note,
+      createdBy: r.createdById ? nameById.get(r.createdById) ?? null : null,
+      createdAt: r.createdAt,
+      pageCount: normalizeDefinition(JSON.parse(r.definition)).pages.length,
+      isCurrent: r.version === app.version,
+    }));
+  }
+
+  /** Restore a previous version into the editable draft (does not auto-publish). */
+  async rollback(id: string, version: number, user: AuthUser) {
+    const app = await this.getOrThrow(id);
+    if (!this.canEdit(app, user)) throw new ForbiddenException('You cannot roll back this app');
+    const snapshot = await this.prisma.appVersion.findUnique({ where: { appId_version: { appId: id, version } } });
+    if (!snapshot) throw new NotFoundException(`Version ${version} not found`);
+    const updated = await this.prisma.app.update({
+      where: { id },
+      data: { definition: snapshot.definition },
+      include: this.include,
+    });
     return this.serialize(updated, user);
   }
 
@@ -285,6 +360,12 @@ export class AppsService {
     return new Set(collectQueryIds(def));
   }
 
+  /** Query ids a single page may run: its bound query, its chat query, and its named actions. */
+  private pageQueryIds(page: AppDefinition['pages'][number]): Set<string> {
+    const ids = [page.queryId, page.chat?.queryId, ...(page.actions ?? []).map((a) => a.queryId)];
+    return new Set(ids.filter((x): x is string => !!x));
+  }
+
   async pageData(id: string, pageId: string, user?: AuthUser) {
     const app = await this.getOrThrow(id);
     this.assertRunnable(app, user);
@@ -293,7 +374,7 @@ export class AppsService {
     if (!page) throw new NotFoundException('Page not found');
     const queryId = page.queryId || page.chat?.queryId;
     if (!queryId) return { data: null };
-    const result = await this.queries.run(queryId);
+    const result = await this.queries.run(queryId, undefined, user?.id, buildIdentity(user));
     return { data: result.data, meta: result.meta };
   }
 
@@ -307,9 +388,9 @@ export class AppsService {
     this.assertRunnable(app, user);
     const def = this.runtimeDefinition(app, user);
 
+    const page = body.pageId ? def.pages.find((p) => p.id === body.pageId) : undefined;
     let queryId = body.queryId;
     if (!queryId && body.action) {
-      const page = body.pageId ? def.pages.find((p) => p.id === body.pageId) : undefined;
       const pages = page ? [page] : def.pages;
       for (const p of pages) {
         const found = (p.actions ?? []).find((a) => a.name === body.action);
@@ -320,14 +401,16 @@ export class AppsService {
       }
     }
     if (!queryId) throw new NotFoundException('Unknown query or action');
-    if (!this.allowedQueryIds(def).has(queryId)) {
-      throw new ForbiddenException('This query is not part of the app');
+    // Scope to the calling page when known (page isolation); otherwise fall back to the whole app.
+    const allowed = page ? this.pageQueryIds(page) : this.allowedQueryIds(def);
+    if (!allowed.has(queryId)) {
+      throw new ForbiddenException(page ? 'This query is not available on this page' : 'This query is not part of the app');
     }
     // Per-app guard: non-editors may run write (mutation) actions only when allowed.
     if (def.allowWriteActions === false && !this.canEdit(app, user) && (await this.isMutationQuery(queryId))) {
       throw new ForbiddenException('You are not allowed to run write actions on this app');
     }
-    const result = await this.queries.run(queryId, body.params);
+    const result = await this.queries.run(queryId, body.params, user?.id, buildIdentity(user));
     return { data: result.data, meta: result.meta };
   }
 
@@ -340,24 +423,128 @@ export class AppsService {
     return (cfg.method || 'GET').toUpperCase() !== 'GET';
   }
 
-  async chat(id: string, pageId: string | undefined, messages: ChatMessage[], user?: AuthUser) {
-    const app = await this.getOrThrow(id);
-    this.assertRunnable(app, user);
-
+  /** Compose the chat system prompt + grounding data for a page (shared by chat + chatStream). */
+  private async chatContext(app: AppWith, pageId: string | undefined, user?: AuthUser) {
     const def = this.runtimeDefinition(app, user);
     const page = pageId ? def.pages.find((p) => p.id === pageId) : def.pages.find((p) => p.type === 'chat');
-    const system = page?.chat?.systemPrompt || `You are an assistant for the "${app.name}" app.`;
-
+    let system = page?.chat?.systemPrompt || `You are an assistant for the "${app.name}" app.`;
+    if (def.buildGuidelines?.trim()) {
+      system += `\n\nProject guidelines to follow:\n${def.buildGuidelines.trim().slice(0, 8000)}`;
+    }
     let contextData: unknown;
     const queryId = page?.chat?.queryId;
     if (queryId) {
       try {
-        contextData = (await this.queries.run(queryId)).data;
+        contextData = (await this.queries.run(queryId, undefined, user?.id, buildIdentity(user))).data;
       } catch {
         contextData = undefined;
       }
     }
+    return { system, contextData };
+  }
 
-    return this.agent.chat(this.aiConfigOf(app), system, messages, contextData);
+  private lastUserMessage(messages: ChatMessage[]): string {
+    return [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+  }
+
+  private assertChatInputWithinLimit(messages: ChatMessage[]) {
+    const words = countWords(this.lastUserMessage(messages));
+    if (words > LIMITS.maxChatInputWords) {
+      throw new BadRequestException(`Message too long: ${words} words (max ${LIMITS.maxChatInputWords}).`);
+    }
+  }
+
+  async chat(id: string, pageId: string | undefined, messages: ChatMessage[], user?: AuthUser, conversationId?: string, persist?: boolean) {
+    const app = await this.getOrThrow(id);
+    this.assertRunnable(app, user);
+    this.assertRate(this.chatLimiter, user?.id ?? 'anon', 'chat');
+    this.assertChatInputWithinLimit(messages);
+    const { system, contextData } = await this.chatContext(app, pageId, user);
+    const doPersist = Boolean(persist && user);
+    let convId = conversationId;
+    if (doPersist) convId = await this.conversations.ensure(app.id, pageId, user!.id, conversationId, this.lastUserMessage(messages));
+    const result = await this.agent.chat(this.aiConfigOf(app), system, messages, contextData, convId ?? conversationId, buildIdentity(user));
+    if (doPersist && convId) await this.conversations.appendTurn(convId, this.lastUserMessage(messages), result.reply);
+    return { ...result, conversationId: doPersist ? convId : undefined };
+  }
+
+  /** Streaming chat: invokes onDelta with each text chunk. Returns the responder source + thread id. */
+  async chatStream(
+    id: string,
+    pageId: string | undefined,
+    messages: ChatMessage[],
+    onDelta: (t: string) => void,
+    user?: AuthUser,
+    conversationId?: string,
+    persist?: boolean,
+  ) {
+    const app = await this.getOrThrow(id);
+    this.assertRunnable(app, user);
+    this.assertRate(this.chatLimiter, user?.id ?? 'anon', 'chat');
+    this.assertChatInputWithinLimit(messages);
+    const { system, contextData } = await this.chatContext(app, pageId, user);
+    const doPersist = Boolean(persist && user);
+    let convId = conversationId;
+    if (doPersist) convId = await this.conversations.ensure(app.id, pageId, user!.id, conversationId, this.lastUserMessage(messages));
+    let full = '';
+    const source = await this.agent.chatStream(
+      this.aiConfigOf(app),
+      system,
+      messages,
+      (d) => { full += d; onDelta(d); },
+      contextData,
+      convId ?? conversationId,
+      buildIdentity(user),
+    );
+    if (doPersist && convId) await this.conversations.appendTurn(convId, this.lastUserMessage(messages), full);
+    return { source, conversationId: doPersist ? convId : undefined };
+  }
+
+  /**
+   * Generate a UI page for an app using its configured AI: an external coding agent (agent-api),
+   * the app's own provider key, or the platform LLM — augmented with the app's build guidelines.
+   */
+  async generateUi(id: string, dto: GenerateUiDto, user: AuthUser): Promise<GenerateUiResult> {
+    const app = await this.getOrThrow(id);
+    if (!this.canEdit(app, user)) throw new ForbiddenException('You cannot edit this app');
+    this.assertRate(this.genLimiter, user.id, 'UI generation');
+
+    const def = normalizeDefinition(JSON.parse(app.definition));
+    const guidelines = dto.guidelines ?? def.buildGuidelines;
+    const effectiveDto: GenerateUiDto = { ...dto, guidelines };
+    const cfg = this.aiConfigOf(app);
+
+    // 1) External coding agent (can sync with its own skills + the guidelines we pass it).
+    if (cfg.mode === 'agent-api' && cfg.agent?.url) {
+      try {
+        const text = await this.agent.generateUiViaAgent(cfg, {
+          prompt: dto.prompt,
+          sample: dto.sample,
+          currentHtml: dto.currentHtml,
+          dataGuidance: dto.dataGuidance,
+          guidelines,
+          queryName: dto.queryName,
+        });
+        const html = this.ai.finalizeHtml(text);
+        if (html) return { html, source: 'agent-api' };
+        return this.ai.fallbackResult(effectiveDto, 'The agent API did not return HTML; used the built-in template instead.');
+      } catch (err) {
+        return this.ai.fallbackResult(effectiveDto, `Agent API request failed (${(err as Error).message}); used the built-in template instead.`);
+      }
+    }
+
+    // 2) App's own provider key, or 3) platform default LLM.
+    try {
+      const result = await this.agent.complete(cfg, this.ai.systemPrompt(guidelines), this.ai.buildUserContent(effectiveDto));
+      if (result) {
+        const html = this.ai.finalizeHtml(result.text);
+        if (html) return { html, source: 'ai' };
+        return this.ai.fallbackResult(effectiveDto, 'The model did not return HTML; used the built-in template instead.');
+      }
+    } catch (err) {
+      return this.ai.fallbackResult(effectiveDto, `AI request failed (${(err as Error).message}); used the built-in template instead.`);
+    }
+    // No provider anywhere -> template.
+    return this.ai.fallbackResult(effectiveDto);
   }
 }
