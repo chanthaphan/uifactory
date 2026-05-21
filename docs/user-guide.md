@@ -1,14 +1,18 @@
 # User guide
 
-How to build, run, and share apps as a **member** (owner / editor / viewer).
+How to build, run, and share apps as a **builder** (platform role `member` or `admin`).
+
+> **Getting Build access.** New SSO users are provisioned as **viewer** — they can browse the **Catalog**
+> and use shared apps, but don't see the **Build** tab. An admin promotes you to **member** (in
+> *Admin → Users*) to grant the Build tools. If you don't see **Build**, ask an admin to make you a member.
 
 ## 1. Sign in
 
 Open the platform URL and sign in with **Microsoft** (Azure AD). On a local/dev instance with no Azure
 configured, pick a demo user from the **dev login**. You're auto-provisioned on first sign-in.
 
-The top bar shows the platform branding (name + logo), and tabs for **Catalog**, **Build**, and (admins)
-**Admin**.
+The top bar shows the platform branding (name + logo, which also drive the browser **tab title + favicon**),
+and tabs for **Catalog**, **Build** (builders only), and (admins) **Admin**.
 
 ## 2. Create an app
 
@@ -16,34 +20,47 @@ Go to **Build → New app**. Give it a name and optionally start **from a templa
 Banking Agent*, *Chat with your data*, *Translate Side-by-Side*, *PDF Text Extraction*, *Parse Text into a
 Table*, *Transactions Dashboard*). Templates clone their data sources, queries, and pages into your new app.
 
-## 3. Connect data
+## 3. Add connectors
 
-Open **Data** (top bar of the editor) to manage data sources and queries for the app.
+Open **Connectors** (top bar of the editor) to manage the app's connectors and queries.
 
-- **Add a data source** — choose a type:
+- **Add a connector** — choose a type (required config fields are validated):
   - **SQLite** — a file path on the server.
   - **PostgreSQL** — a connection string.
-  - **REST API** — a base URL (+ optional default headers). You can also enable:
+  - **REST API** — a base URL (+ optional default headers, JSON). You can also enable:
     - **Per-user credentials** — each user supplies their own token/connection string (see §7).
     - **Forward signed user identity** — attach a signed `X-UIFactory-User` JWT and fill
       `{{user_email}}` / `{{user_id}}` / `{{user_name}}` template values, so the API knows who's calling.
   - **Microsoft 365 (Graph)** — uses the platform's Azure app; no per-app config.
-  - **…or add a prebuilt connector** an admin published, in one click.
-- **Add a query** — name it, pick a data source, then:
-  - SQL sources: write SQL. Use `{{param}}` placeholders (bound, never string-interpolated).
+  - **Agent API** — an external conversational endpoint (URL + optional API key / auth header) that a
+    **chat page** can use as its responder (see §5).
+  - **…or add from the connector library** — clone a prebuilt connector an admin published, in one click.
+- **Test** a connector before saving (REST actually probes the endpoint; SQL/Graph open a connection).
+- **Edit / delete** — every connector and query has an **edit** (pencil) action. Secrets are shown masked;
+  leave them unchanged to keep the stored value, or type a new one to replace it. The connector **type**
+  is fixed after creation.
+- **Add a query** — name it, pick a connector, then:
+  - SQL connectors: write SQL. Use `{{param}}` placeholders (bound, never string-interpolated).
   - REST/Graph: pick a **method** + **path**, an optional **request body** (for non-GET), and
     **API schema / usage guidance** — a free-text hint that steers AI generation on how to use the response.
-- **Test** a source and **Run** a query to preview results (table / chart / JSON).
+- **Run** a query (▶) to preview results (table / chart / JSON).
 
 ## 4. Build a UI page
 
 Each UI page can be authored three ways — switch with the toggle (**Drag & drop · AI generate · Source
 code · Preview**). The **Data & actions** panel (top) is shared by all modes:
 
+- **Connectors available on this page** — optionally restrict the page to a subset of the app's
+  connectors. Left empty, the page may use all of them; once set, only queries on those connectors are
+  selectable, and the runtime **blocks** any out-of-scope query (a hard boundary).
 - **Bound query** — the query whose result becomes `window.APP_DATA` for the page. Click **Run query** to
   load sample data for the builder/preview.
 - **Actions** — expose a query to the UI under a name; the UI calls `UIFactory.runAction(name, params)`
-  (used for filters, lookups, and write-back).
+  (used for filters, lookups, and write-back). Each action has a ▶ **Run & preview** button (it executes
+  the query, so write actions will modify data).
+
+The editor toolbar has **Undo/Redo** for definition edits (pages, content, bindings, connector scope,
+theme); changes are session-local until you **Save**.
 
 ### Drag-and-drop builder
 
@@ -78,22 +95,25 @@ Edit the page HTML directly with a live preview. Generated UIs may use the `wind
 ## 5. Build a chat page
 
 Add a **chat page** and set a **system prompt**, **greeting**, and an optional **grounding query** (its
-result is given to the assistant as context). The **responder** is the app's AI/agent connection:
+result is given to the assistant as context; a ▶ button previews it). The **responder** is either:
 
-- **Platform LLM** (server default), **the app's own provider key**, or an **external conversation-AI
-  API**. The agent endpoint receives the transcript, the latest `message`, a stable `conversationId`, the
-  grounding `data`, and the signed user identity — so a stateful, per-user assistant works out of the box.
+- the app's **LLM** (Platform default or the app's own provider key), or
+- an **Agent API connector** selected on the page (overrides the app LLM for this page). The agent endpoint
+  receives the transcript, the latest `message`, a stable `conversationId`, the grounding `data`, and the
+  signed user identity — so a stateful, per-user assistant works out of the box. Add Agent API connectors
+  in the **Connectors** panel (§3).
 
 Replies render as **markdown** and **stream** in. For signed-in users, conversations are **saved** as
 named threads: use the thread switcher to resume, start a **New chat**, or delete a thread. (Anonymous
 visitors on public apps stay ephemeral.)
 
-## 6. AI / agent connection & build guidelines
+## 6. AI connection & build guidelines
 
 In **Settings** (editor top bar):
 
-- **AI / agent connection** — choose Platform default, this app's provider key (Claude / OpenAI / Azure
-  OpenAI), or an external agent API URL (with optional auth header). This drives both UI generation and chat.
+- **AI connection** — choose Platform default or this app's own provider key (Claude / OpenAI / Azure
+  OpenAI). This drives UI generation and any chat page that doesn't pick its own Agent API connector.
+  (External assistants are Agent API connectors, selected per chat page — see §3 / §5.)
 - **Build guidelines** — an AGENTS.md / CLAUDE.md-style note (conventions, design system, response
   decoding rules) injected into generation and chat prompts.
 - **Branding, sharing, permissions** — per-app brand name/color/logo, who can access, and whether
@@ -101,11 +121,11 @@ In **Settings** (editor top bar):
 
 ## 7. Connect your own credentials
 
-If a data source is marked **per-user**, you supply your own secret before it will run for you:
+If a connector is marked **per-user**, you supply your own secret before it will run for you:
 
-- In the editor's **Data → Your credentials** section, or in a deployed app via **Connect accounts** in
-  the top bar. Enter your token/header (REST) or connection string (PostgreSQL).
-- Your credential is encrypted per-user and only used for your sessions. Without it, that source returns
+- In the editor's **Connectors → Your credentials** section, or in a deployed app via **Connect accounts**
+  in the top bar. Enter your token/header (REST) or connection string (PostgreSQL).
+- Your credential is encrypted per-user and only used for your sessions. Without it, that connector returns
   a clear "connect your account" error.
 
 ## 8. Versions, deploy & share

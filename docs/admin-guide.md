@@ -2,11 +2,17 @@
 
 Admins (platform role `admin`) get an **Admin** tab with four sections. Admins can also view/edit any app.
 
-## Users
+## Users & onboarding
 
-`Admin → Users` lists every account. Change a user's **role** (`admin` / `member`) or **active** flag.
-Users are auto-provisioned on first SSO login; the emails in `ADMIN_EMAILS` (and the very first user)
-become admins automatically.
+`Admin → Users` lists every account. Change a user's **role** or **active** flag. Roles:
+
+- **admin** — full control (this console + edit any app).
+- **member** — a **builder**: sees the **Build** tab and can create/edit/deploy apps.
+- **viewer** — catalog access only (use shared public/org apps); no Build tab, authoring APIs return `403`.
+
+**Onboarding a new person:** they sign in once (auto-provisioned as **viewer**), then you promote them to
+**member** here to grant the Build tools. The emails in `ADMIN_EMAILS` (and the very first user ever)
+become **admin** automatically. The last active admin can't demote/deactivate themselves.
 
 ## Templates
 
@@ -22,14 +28,15 @@ Transactions Dashboard, Agent Console, and blank starters).
 
 ## Connectors (prebuilt data sources)
 
-`Admin → Connectors` curates reusable data-source connections any member can clone into an app in one
-click (**Data → Add a prebuilt connector**).
+`Admin → Connectors` curates reusable connector configs any builder can clone into an app in one click
+(the editor's **Connectors → Add from connector library**).
 
 - **Create** — name, optional category/description, type (REST / PostgreSQL / SQLite / Microsoft 365),
-  and config (e.g. a REST base URL + default headers). Secrets are encrypted and never shown back.
+  and config (e.g. a REST base URL + default headers). Required config fields are validated; secrets are
+  encrypted and never shown back (editing preserves any secret you leave masked).
 - **Delete** — removes the connector; apps that already cloned it keep their own copy.
 
-Cloning copies the connector's (decrypted-then-re-encrypted) config into a new per-app data source.
+Cloning copies the connector's (decrypted-then-re-encrypted) config into a new per-app connector.
 
 ## Settings — platform branding & AI defaults
 

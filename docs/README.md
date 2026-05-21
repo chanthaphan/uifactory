@@ -17,15 +17,18 @@ version, deploy, and share them across the organization.
 ## Concepts at a glance
 
 - **App** — a deployable unit with one or more **pages** (UI or chat), a **theme**, optional **build
-  guidelines**, and per-app **AI/agent connection**. Edited as a *draft*; **publishing** snapshots an
-  immutable **version** that runners see.
+  guidelines**, and a per-app **AI connection** (platform LLM or own provider key; chat pages may use an
+  Agent API connector). Edited as a *draft*; **publishing** snapshots an immutable **version** that
+  runners see.
 - **Page** — a **UI page** (rendered from `window.APP_DATA`, authored via builder / AI / code) or a
-  **chat page** (LLM or agent-backed, optionally grounded on a query).
-- **Data source** — a REST API, PostgreSQL, SQLite, or Microsoft 365 connection owned by one app.
-  Credentials can be **shared** or **per-user**.
-- **Query** — a saved request (SQL or REST/Graph call) against a data source. A page exposes selected
+  **chat page** (LLM or Agent-API-connector-backed, optionally grounded on a query). A page can be
+  **scoped** to a subset of the app's connectors.
+- **Connector** — a connection owned by one app: REST API, PostgreSQL, SQLite, Microsoft 365, or an
+  **Agent API** (an external assistant a chat page can use). Managed in the editor's **Connectors** panel;
+  credentials can be **shared** or **per-user**. (A connector is a "data source" in the API/data model.)
+- **Prebuilt connector** — an admin-curated, reusable connector template any builder can clone into an app.
+- **Query** — a saved request (SQL or REST/Graph call) against a connector. A page exposes selected
   queries as **actions** the UI can call (`UIFactory.runAction`).
-- **Connector** — an admin-curated, reusable data-source template any member can clone into an app.
 - **Conversation** — a persisted, per-user chat thread (for signed-in users).
 
 > The platform is designed for **trusted internal use**: apps run the SQL / HTTP / agent calls you

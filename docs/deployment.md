@@ -16,7 +16,9 @@ Open http://localhost:5173 and pick a demo user from the dev login. Useful scrip
 | Command | What it does |
 | ------- | ------------ |
 | `npm run build` | build backend + typecheck/bundle frontend |
+| `npm test --workspace backend` | backend unit tests (`node --test` via tsx) |
 | `npm run setup --workspace backend` | re-run prisma generate + db push + seed |
+| `npm run migrate:agent-connectors --workspace backend` | one-off: convert legacy app-level agents → Agent API connectors (idempotent) |
 | `npm run dev:backend` / `npm run dev:frontend` | run one side only |
 
 ## Docker
@@ -71,3 +73,6 @@ See [`charts/uifactory/README.md`](../charts/uifactory/README.md) for the full v
 - Move to PostgreSQL with migrations; the SQLite path opens a connection per query (no pooling) and the
   schema currently uses `prisma db push` (no migration history yet).
 - Rate limiting is in-memory per process — back it with a shared store for multiple replicas.
+- **Upgrade step:** after deploying this version, run `npm run migrate:agent-connectors --workspace
+  backend` once to convert any legacy app-level "external agent API" connections into Agent API
+  connectors (idempotent — safe to re-run).

@@ -33,8 +33,9 @@ ConfigMap / Key Vault in production). A starter file lives at `backend/.env.exam
 
 The platform LLM is auto-detected from whichever keys are present (priority: Anthropic → Azure OpenAI →
 OpenAI), or forced with `AI_PROVIDER` (`anthropic` | `openai` | `azure-openai` | `auto`). Apps can
-override this per-app with their own key or an external agent API. With no provider, chat and generation
-fall back to a labelled mock / built-in template.
+override this per-app with their own provider key (external assistants are added as Agent API connectors
+and selected per chat page). With no provider, chat and generation fall back to a labelled mock / built-in
+template.
 
 | Variable | Purpose |
 | -------- | ------- |
