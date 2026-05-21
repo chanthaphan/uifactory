@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { PrismaClient } from '@prisma/client';
 import { randomBytes } from 'node:crypto';
 import { buildFallbackHtml } from '../src/ai/fallback-generator';
-import { slugify, AppDefinition } from '../src/apps/app-defs';
+import { slugify, AppDefinition, AppPage } from '../src/apps/app-defs';
 
 const prisma = new PrismaClient();
 
@@ -158,14 +158,42 @@ ORDER BY revenue DESC;`,
       }),
     },
   });
-  await prisma.query.create({
+  const customersQuery = await prisma.query.create({
     data: {
       name: 'All customers',
       dataSourceId: sqliteDs.id,
-      config: JSON.stringify({ sql: 'SELECT * FROM customers ORDER BY created_at DESC;' }),
+      config: JSON.stringify({ sql: 'SELECT id, name, email, country, created_at FROM customers ORDER BY created_at DESC;' }),
     },
   });
-  await prisma.query.create({
+  const productsQuery = await prisma.query.create({
+    data: {
+      name: 'Product catalog',
+      dataSourceId: sqliteDs.id,
+      config: JSON.stringify({ sql: 'SELECT id, name, category, price FROM products ORDER BY category, name;' }),
+    },
+  });
+  const ordersByStatusQuery = await prisma.query.create({
+    data: {
+      name: 'Orders by status',
+      dataSourceId: sqliteDs.id,
+      config: JSON.stringify({
+        sql: `SELECT o.id, c.name AS customer, p.name AS product, o.total, o.status, o.ordered_at
+FROM orders o JOIN customers c ON c.id = o.customer_id JOIN products p ON p.id = o.product_id
+WHERE o.status = {{status}}
+ORDER BY o.ordered_at DESC;`,
+      }),
+    },
+  });
+  const addCustomerQuery = await prisma.query.create({
+    data: {
+      name: 'Add customer',
+      dataSourceId: sqliteDs.id,
+      config: JSON.stringify({
+        sql: `INSERT INTO customers (name, email, country, created_at) VALUES ({{name}}, {{email}}, {{country}}, date('now'));`,
+      }),
+    },
+  });
+  const restUsersQuery = await prisma.query.create({
     data: { name: 'GET /users', dataSourceId: restDs.id, config: JSON.stringify({ method: 'GET', path: '/users' }) },
   });
   await prisma.query.create({
@@ -173,49 +201,101 @@ ORDER BY revenue DESC;`,
   });
 
   console.log('Creating templates…');
-  const ordersSample = JSON.stringify([
-    { id: 40, customer: 'Wayne Enterprises', product: 'Coffee Subscription', quantity: 4, total: 236, status: 'refunded' },
-    { id: 39, customer: 'Stark Manufacturing', product: 'Laptop Pro 16', quantity: 3, total: 7197, status: 'shipped' },
-  ]);
+  const pid = () => `page-${randomBytes(3).toString('hex')}`;
+  const samples = {
+    orders: JSON.stringify([
+      { id: 40, customer: 'Wayne Enterprises', product: 'Coffee Subscription', quantity: 4, total: 236, status: 'refunded' },
+      { id: 39, customer: 'Stark Manufacturing', product: 'Laptop Pro 16', quantity: 3, total: 7197, status: 'shipped' },
+    ]),
+    revenue: JSON.stringify([
+      { category: 'Electronics', orders: 20, revenue: 42860 },
+      { category: 'Furniture', orders: 10, revenue: 7700 },
+    ]),
+    customers: JSON.stringify([
+      { id: 1, name: 'Acme Robotics', email: 'ops@acme.io', country: 'USA', created_at: '2026-03-22' },
+      { id: 2, name: 'Globex Foods', email: 'buy@globex.com', country: 'Canada', created_at: '2026-03-27' },
+    ]),
+    products: JSON.stringify([
+      { id: 1, name: 'Standing Desk', category: 'Furniture', price: 420 },
+      { id: 3, name: 'Laptop Pro 16', category: 'Electronics', price: 2399 },
+    ]),
+    users: JSON.stringify([
+      { id: 1, name: 'Leanne Graham', username: 'Bret', email: 'Sincere@april.biz' },
+      { id: 2, name: 'Ervin Howell', username: 'Antonette', email: 'Shanna@melissa.tv' },
+    ]),
+  };
+  const ordersSample = samples.orders;
   const ordersHtml = buildFallbackHtml('Orders dashboard with a sortable, filterable table', ordersSample, 'Orders');
 
-  const pid = () => `page-${randomBytes(3).toString('hex')}`;
-
-  const dashboardTemplateDef: AppDefinition = {
-    pages: [
-      { id: pid(), name: 'Orders', slug: 'orders', type: 'ui', queryId: ordersQuery.id, prompt: 'Orders dashboard table', html: ordersHtml, sample: ordersSample },
-    ],
-  };
-  const assistantTemplateDef: AppDefinition = {
-    pages: [
-      {
-        id: pid(),
-        name: 'Assistant',
-        slug: 'assistant',
-        type: 'chat',
-        chat: { systemPrompt: 'You are a helpful business analyst.', greeting: 'Hi! How can I help you today?' },
-      },
-    ],
-  };
-
-  await prisma.template.create({
-    data: {
-      name: 'Orders Dashboard',
-      description: 'A data table bound to a SQL query.',
-      category: 'Dashboard',
-      definition: JSON.stringify(dashboardTemplateDef),
-      createdById: admin.id,
-    },
+  const uiPage = (
+    name: string,
+    slug: string,
+    queryId: string,
+    prompt: string,
+    sample: string,
+    actions?: { name: string; queryId: string }[],
+  ): AppPage => ({
+    id: pid(),
+    name,
+    slug,
+    type: 'ui',
+    queryId,
+    prompt,
+    sample,
+    html: buildFallbackHtml(prompt, sample, name),
+    ...(actions ? { actions } : {}),
   });
-  await prisma.template.create({
-    data: {
-      name: 'Support Assistant',
-      description: 'A conversational chat UI.',
-      category: 'Chat',
-      definition: JSON.stringify(assistantTemplateDef),
-      createdById: admin.id,
-    },
+  const chatPage = (name: string, slug: string, systemPrompt: string, greeting: string, queryId?: string): AppPage => ({
+    id: pid(),
+    name,
+    slug,
+    type: 'chat',
+    chat: { systemPrompt, greeting, ...(queryId ? { queryId } : {}) },
   });
+
+  const templates: { name: string; description: string; category: string; definition: AppDefinition }[] = [
+    { name: 'Orders Dashboard', description: 'Sortable, filterable table of recent orders.', category: 'Dashboard',
+      definition: { pages: [uiPage('Orders', 'orders', ordersQuery.id, 'Orders dashboard with a sortable, filterable table and a row/total summary', samples.orders)] } },
+    { name: 'Revenue Analytics', description: 'Revenue by category with summary cards and a chart.', category: 'Dashboard',
+      definition: { pages: [uiPage('Revenue', 'revenue', revenueQuery.id, 'Revenue analytics: summary cards for totals plus a bar chart of revenue by category and a breakdown table', samples.revenue)] } },
+    { name: 'Customer Directory', description: 'Searchable directory of customers.', category: 'Dashboard',
+      definition: { pages: [uiPage('Customers', 'customers', customersQuery.id, 'Customer directory: a searchable, sortable table with a country filter', samples.customers)] } },
+    { name: 'Product Catalog', description: 'Products grouped by category.', category: 'Dashboard',
+      definition: { pages: [uiPage('Products', 'products', productsQuery.id, 'Product catalog: cards grouped by category showing name and price, with a search box', samples.products)] } },
+    { name: 'REST API Explorer', description: 'Render data returned by a REST API.', category: 'Integration',
+      definition: { pages: [uiPage('Users', 'users', restUsersQuery.id, 'A table of users returned by the REST API with a text filter', samples.users)] } },
+    { name: 'Executive KPI Summary', description: 'High-level KPI cards from revenue data.', category: 'Dashboard',
+      definition: { pages: [uiPage('Summary', 'summary', revenueQuery.id, 'Executive summary: large KPI cards for total revenue, total orders, and the top category', samples.revenue)] } },
+    { name: 'Support Assistant', description: 'A conversational chat assistant.', category: 'Chat',
+      definition: { pages: [chatPage('Assistant', 'assistant', 'You are a friendly support assistant for our internal tools.', 'Hi! How can I help you today?')] } },
+    { name: 'Data Analyst (grounded)', description: 'Chat grounded on revenue data.', category: 'Chat',
+      definition: { pages: [chatPage('Analyst', 'analyst', 'You are a data analyst. Answer using the provided revenue dataset and cite the numbers.', 'Ask me about revenue by category.', revenueQuery.id)] } },
+    { name: 'SQL Query Helper', description: 'Assistant that helps write and explain SQL.', category: 'Chat',
+      definition: { pages: [chatPage('SQL Helper', 'sql-helper', 'You are an expert SQL assistant. Help the user write and explain SQL queries.', 'Describe the query you need and I will help you write the SQL.')] } },
+    { name: 'Operations Console', description: 'Multi-page: orders dashboard + AI assistant.', category: 'Multi-page',
+      definition: { pages: [uiPage('Orders', 'orders', ordersQuery.id, 'Orders dashboard table', samples.orders), chatPage('Assistant', 'assistant', 'You are an operations analyst for the orders app.', 'How can I help with operations?', revenueQuery.id)] } },
+    { name: 'Customer 360', description: 'Multi-page: customer directory + grounded chat.', category: 'Multi-page',
+      definition: { pages: [uiPage('Customers', 'customers', customersQuery.id, 'Customer directory table', samples.customers), chatPage('Assistant', 'assistant', 'You are a CRM assistant. Use the customer dataset to answer questions.', 'Ask me about our customers.', customersQuery.id)] } },
+    { name: 'Customer Admin (CRUD)', description: 'Customer table plus an add-customer form (write-back).', category: 'Forms',
+      definition: { pages: [uiPage('Customers', 'customers', customersQuery.id,
+        'A customer admin screen: a table of customers, plus an "Add customer" form with name, email and country fields. On submit call UIFactory.runAction("createCustomer", {name, email, country}) then UIFactory.refresh().',
+        samples.customers, [{ name: 'createCustomer', queryId: addCustomerQuery.id }, { name: 'listCustomers', queryId: customersQuery.id }])] } },
+    { name: 'Orders by Status (filter)', description: 'Interactive orders list with a status filter.', category: 'Interactive',
+      definition: { pages: [uiPage('Orders', 'orders', ordersQuery.id,
+        'Orders list with a status dropdown (paid, pending, shipped, refunded). When it changes, call UIFactory.runAction("byStatus", {status}) and re-render the table with the returned rows.',
+        samples.orders, [{ name: 'byStatus', queryId: ordersByStatusQuery.id }])] } },
+    { name: 'Blank Dashboard', description: 'Start from an empty UI page.', category: 'Starter',
+      definition: { pages: [{ id: pid(), name: 'Home', slug: 'home', type: 'ui' }] } },
+    { name: 'Blank Chat', description: 'Start from an empty chat page.', category: 'Starter',
+      definition: { pages: [{ id: pid(), name: 'Chat', slug: 'chat', type: 'chat', chat: { greeting: 'Hi! How can I help?' } }] } },
+  ];
+
+  for (const t of templates) {
+    await prisma.template.create({
+      data: { name: t.name, description: t.description, category: t.category, definition: JSON.stringify(t.definition), createdById: admin.id },
+    });
+  }
+  console.log(`  -> ${templates.length} templates created`);
 
   console.log('Creating a sample deployed app…');
   const sampleAppDef: AppDefinition = {
@@ -251,8 +331,8 @@ ORDER BY revenue DESC;`,
 
   console.log('Seed complete:');
   console.log('  - 3 users (1 admin, 2 members)');
-  console.log('  - 2 data sources (SQLite + REST), 5 queries');
-  console.log('  - 2 templates, 1 deployed sample app');
+  console.log('  - 2 data sources (SQLite + REST), 8 queries');
+  console.log(`  - ${templates.length} templates, 1 deployed sample app`);
 }
 
 main()
