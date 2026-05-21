@@ -1,7 +1,39 @@
 import { useEffect, useRef, useState } from 'react';
 import { Box, IconButton, Paper, Stack, TextField, Typography } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { api, ChatMessage } from '../api/client';
+
+/** Render assistant replies as GitHub-flavoured markdown (raw HTML is not rendered — safe by default). */
+function MarkdownMessage({ text }: { text: string }) {
+  return (
+    <Box
+      sx={{
+        fontSize: 14, lineHeight: 1.5, wordBreak: 'break-word',
+        '& > :first-of-type': { mt: 0 }, '& > :last-child': { mb: 0 },
+        '& p': { my: 0.75 },
+        '& ul, & ol': { my: 0.75, pl: 2.5 },
+        '& li': { mb: 0.25 },
+        '& h1, & h2, & h3, & h4': { my: 1, fontWeight: 700, fontSize: 15 },
+        '& a': { color: 'primary.main' },
+        '& code': { bgcolor: 'rgba(0,0,0,0.06)', px: 0.5, py: 0.1, borderRadius: 0.5, fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 12.5 },
+        '& pre': { bgcolor: '#0f172a', color: '#e2e8f0', p: 1.25, borderRadius: 1, overflow: 'auto', my: 0.75 },
+        '& pre code': { bgcolor: 'transparent', color: 'inherit', p: 0 },
+        '& table': { borderCollapse: 'collapse', my: 0.75, width: '100%' },
+        '& th, & td': { border: '1px solid', borderColor: 'divider', px: 1, py: 0.5, textAlign: 'left' },
+        '& blockquote': { borderLeft: '3px solid', borderColor: 'divider', pl: 1.5, my: 0.75, color: 'text.secondary' },
+      }}
+    >
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{ a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" /> }}
+      >
+        {text}
+      </ReactMarkdown>
+    </Box>
+  );
+}
 
 interface Props {
   appId: string;
@@ -65,10 +97,12 @@ export default function ChatView({ appId, pageId, greeting }: Props) {
                   bgcolor: m.role === 'user' ? 'primary.main' : '#fff',
                   color: m.role === 'user' ? '#fff' : 'text.primary',
                   border: m.role === 'user' ? 'none' : '1px solid', borderColor: 'divider',
-                  whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  wordBreak: 'break-word',
                 }}
               >
-                <Typography variant="body2">{m.content}</Typography>
+                {m.role === 'assistant'
+                  ? <MarkdownMessage text={m.content} />
+                  : <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{m.content}</Typography>}
               </Paper>
             </Stack>
           ))}

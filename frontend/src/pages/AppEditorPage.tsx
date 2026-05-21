@@ -21,6 +21,8 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import HistoryIcon from '@mui/icons-material/History';
 import RestoreIcon from '@mui/icons-material/Restore';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   api, AppAiConfig, AppDefinition, AppFull, AppPage, AppVersion, CanvasLayout, DataSource, EditorMode, QueryDef, Visibility,
@@ -47,6 +49,17 @@ const COMPONENT_SUGGESTIONS = [
   'Lay the content out in two columns',
 ];
 
+type GenStatus = { state: 'running' | 'done' | 'error'; message?: string };
+interface GenerateOpts {
+  prompt: string;
+  storePrompt: string;
+  sample: string;
+  queryName?: string;
+  currentHtml?: string;
+  dataGuidance?: string;
+  queryId?: string;
+}
+
 /** Field names available from the bound query result (to help bind builder components). */
 function fieldsOf(data: unknown): string[] {
   let arr: unknown[] = [];
@@ -61,7 +74,7 @@ function fieldsOf(data: unknown): string[] {
 }
 
 // ---------------- UI page editor ----------------
-function UiPageEditor({ appId, page, brandColor, onPatch, dataVersion }: { appId: string; page: AppPage; brandColor?: string; onPatch: (p: Partial<AppPage>) => void; dataVersion: number }) {
+function UiPageEditor({ appId, page, brandColor, status, onGenerate, onPatch, dataVersion }: { appId: string; page: AppPage; brandColor?: string; status?: GenStatus; onGenerate: (pageId: string, opts: GenerateOpts) => void; onPatch: (p: Partial<AppPage>) => void; dataVersion: number }) {
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
   const [queries, setQueries] = useState<QueryDef[]>([]);
   const [queryId, setQueryId] = useState(page.queryId || '');
@@ -69,7 +82,7 @@ function UiPageEditor({ appId, page, brandColor, onPatch, dataVersion }: { appId
   const [running, setRunning] = useState(false);
   const [prompt, setPrompt] = useState(page.prompt || 'Build a clean dashboard with a table and summary of this data.');
   const [refinePrompt, setRefinePrompt] = useState('');
-  const [generating, setGenerating] = useState(false);
+  const generating = status?.state === 'running';
   const [error, setError] = useState('');
   const initialView: EditorMode = page.editorMode || (page.layout?.components?.length ? 'canvas' : 'ai');
   const [view, setView] = useState<'ai' | 'canvas' | 'code' | 'preview'>(initialView);
@@ -103,24 +116,17 @@ function UiPageEditor({ appId, page, brandColor, onPatch, dataVersion }: { appId
     }
   };
 
-  const generate = async (refine: boolean) => {
-    setGenerating(true);
-    setError('');
-    try {
-      const res = await api.generateUi({
-        prompt: refine ? refinePrompt : prompt,
-        sample: JSON.stringify(result ?? null),
-        queryName: page.name,
-        currentHtml: refine ? page.html : undefined,
-        dataGuidance: dataGuidance || undefined,
-      });
-      onPatch({ html: res.html, prompt, queryId: queryId || undefined, editorMode: 'ai' });
-      if (refine) setRefinePrompt('');
-    } catch (e) {
-      setError(api.errMessage(e));
-    } finally {
-      setGenerating(false);
-    }
+  const generate = (refine: boolean) => {
+    onGenerate(page.id, {
+      prompt: refine ? refinePrompt : prompt,
+      storePrompt: prompt,
+      sample: JSON.stringify(result ?? null),
+      queryName: page.name,
+      currentHtml: refine ? page.html : undefined,
+      dataGuidance: dataGuidance || undefined,
+      queryId: queryId || undefined,
+    });
+    if (refine) setRefinePrompt('');
   };
 
   const onLayoutChange = (layout: CanvasLayout) => {
@@ -234,7 +240,7 @@ function UiPageEditor({ appId, page, brandColor, onPatch, dataVersion }: { appId
                 <Typography variant="overline" color="secondary">Generate UI with AI</Typography>
                 <TextField label="Describe the UI" value={prompt} onChange={(e) => setPrompt(e.target.value)} multiline minRows={2} size="small" />
                 <Button variant="contained" color="secondary" startIcon={generating ? <CircularProgress size={16} color="inherit" /> : <AutoAwesomeIcon />} onClick={() => generate(false)} disabled={generating}>
-                  Generate
+                  {generating ? 'Generating…' : 'Generate'}
                 </Button>
                 {page.html && (
                   <Stack direction="row" spacing={1}>
@@ -242,6 +248,9 @@ function UiPageEditor({ appId, page, brandColor, onPatch, dataVersion }: { appId
                     <Button variant="outlined" disabled={generating || !refinePrompt.trim()} onClick={() => generate(true)}>Refine</Button>
                   </Stack>
                 )}
+                {status?.state === 'running' && <Alert severity="info" icon={<CircularProgress size={16} />}>Generating this page… you can switch pages; it keeps running.</Alert>}
+                {status?.state === 'done' && <Alert severity="success" sx={{ py: 0 }}>Generation finished.</Alert>}
+                {status?.state === 'error' && <Alert severity="error">{status.message || 'Generation failed'}</Alert>}
                 <Divider />
                 <Typography variant="overline">Add a component</Typography>
                 <Typography variant="caption" color="text.secondary">Click to {page.html ? 'queue a refine' : 'set the prompt'}, then Generate / Refine.</Typography>
@@ -363,6 +372,7 @@ export default function AppEditorPage() {
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [versions, setVersions] = useState<AppVersion[]>([]);
   const [publishNote, setPublishNote] = useState('');
+  const [genStatus, setGenStatus] = useState<Record<string, GenStatus>>({});
 
   const load = async () => {
     const a = await api.getApp(id);
@@ -383,6 +393,27 @@ export default function AppEditorPage() {
   const patchPage = (pageId: string, patch: Partial<AppPage>) => {
     setDef((d) => ({ ...d, pages: d.pages.map((p) => (p.id === pageId ? { ...p, ...patch } : p)) }));
     setDirty(true);
+  };
+
+  // Generation runs at the app level so its status survives navigating between pages.
+  const runGenerate = async (pageId: string, opts: GenerateOpts) => {
+    const pageName = def.pages.find((p) => p.id === pageId)?.name || 'page';
+    setGenStatus((s) => ({ ...s, [pageId]: { state: 'running' } }));
+    try {
+      const res = await api.generateUi({
+        prompt: opts.prompt,
+        sample: opts.sample,
+        queryName: opts.queryName,
+        currentHtml: opts.currentHtml,
+        dataGuidance: opts.dataGuidance,
+      });
+      patchPage(pageId, { html: res.html, prompt: opts.storePrompt, queryId: opts.queryId, editorMode: 'ai' });
+      setGenStatus((s) => ({ ...s, [pageId]: { state: 'done' } }));
+      setToast(`"${pageName}": UI generated`);
+    } catch (e) {
+      setGenStatus((s) => ({ ...s, [pageId]: { state: 'error', message: api.errMessage(e) } }));
+      setToast(`"${pageName}": generation failed`);
+    }
   };
 
   const addPage = (type: 'ui' | 'chat') => {
@@ -503,13 +534,19 @@ export default function AppEditorPage() {
           </Stack>
           <Divider />
           <List dense>
-            {def.pages.map((p) => (
-              <ListItemButton key={p.id} selected={p.id === selectedId} onClick={() => setSelectedId(p.id)}>
-                <ListItemIcon sx={{ minWidth: 32 }}>{p.type === 'chat' ? <ChatIcon fontSize="small" /> : <DashboardIcon fontSize="small" />}</ListItemIcon>
-                <ListItemText primary={p.name} />
-                <IconButton size="small" onClick={(e) => { e.stopPropagation(); deletePage(p.id); }}><DeleteOutlineIcon fontSize="small" /></IconButton>
-              </ListItemButton>
-            ))}
+            {def.pages.map((p) => {
+              const gs = genStatus[p.id];
+              return (
+                <ListItemButton key={p.id} selected={p.id === selectedId} onClick={() => setSelectedId(p.id)}>
+                  <ListItemIcon sx={{ minWidth: 32 }}>{p.type === 'chat' ? <ChatIcon fontSize="small" /> : <DashboardIcon fontSize="small" />}</ListItemIcon>
+                  <ListItemText primary={p.name} />
+                  {gs?.state === 'running' && <Tooltip title="Generating…"><CircularProgress size={14} sx={{ mr: 0.5 }} /></Tooltip>}
+                  {gs?.state === 'done' && <Tooltip title="Generation finished"><CheckCircleIcon color="success" fontSize="small" sx={{ mr: 0.5 }} /></Tooltip>}
+                  {gs?.state === 'error' && <Tooltip title={gs.message || 'Generation failed'}><ErrorOutlineIcon color="error" fontSize="small" sx={{ mr: 0.5 }} /></Tooltip>}
+                  <IconButton size="small" onClick={(e) => { e.stopPropagation(); deletePage(p.id); }}><DeleteOutlineIcon fontSize="small" /></IconButton>
+                </ListItemButton>
+              );
+            })}
             {def.pages.length === 0 && <Typography variant="caption" sx={{ px: 2, color: 'text.secondary' }}>No pages. Add one above.</Typography>}
           </List>
         </Box>
@@ -519,7 +556,7 @@ export default function AppEditorPage() {
             <Box key={selected.id} sx={{ height: '100%' }}>
               <TextField size="small" label="Page name" value={selected.name} onChange={(e) => patchPage(selected.id, { name: e.target.value })} sx={{ mb: 2 }} />
               {selected.type === 'ui' ? (
-                <UiPageEditor appId={id} page={selected} brandColor={(def.theme as { brandColor?: string } | undefined)?.brandColor} onPatch={(p) => patchPage(selected.id, p)} dataVersion={dataVersion} />
+                <UiPageEditor appId={id} page={selected} brandColor={(def.theme as { brandColor?: string } | undefined)?.brandColor} status={genStatus[selected.id]} onGenerate={runGenerate} onPatch={(p) => patchPage(selected.id, p)} dataVersion={dataVersion} />
               ) : (
                 <ChatPageEditor page={selected} appId={id} saved={!dirty} aiMode={aiConfig.mode} onOpenSettings={() => setSettingsOpen(true)} onPatch={(p) => patchPage(selected.id, p)} dataVersion={dataVersion} />
               )}
