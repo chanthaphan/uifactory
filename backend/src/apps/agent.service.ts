@@ -6,6 +6,7 @@ import { AppAiConfig } from './app-defs';
 import { detectProviderName, defaultModel } from '../ai/ai.providers';
 import { assertSafeUrl } from '../common/safe-url';
 import { LIMITS } from '../common/limits';
+import { RequestIdentity } from '../execution/execution.types';
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
@@ -58,12 +59,12 @@ export class AgentService {
   }
 
   /** Run a chat turn using the app's AI/agent connection (or the platform default, or a mock). */
-  async chat(cfg: AppAiConfig, system: string, messages: ChatMessage[], contextData?: unknown, conversationId?: string): Promise<ChatResult> {
+  async chat(cfg: AppAiConfig, system: string, messages: ChatMessage[], contextData?: unknown, conversationId?: string, identity?: RequestIdentity): Promise<ChatResult> {
     messages = this.trimHistory(messages);
     const grounded = this.withContext(system, contextData);
 
     if (cfg.mode === 'agent-api' && cfg.agent?.url) {
-      return { reply: await this.callAgentApi(cfg, grounded, messages, contextData, conversationId), source: 'agent-api' };
+      return { reply: await this.callAgentApi(cfg, grounded, messages, contextData, conversationId, identity), source: 'agent-api' };
     }
 
     const spec = this.resolveProviderSpec(cfg);
@@ -205,11 +206,12 @@ export class AgentService {
     onDelta: (t: string) => void,
     contextData?: unknown,
     conversationId?: string,
+    identity?: RequestIdentity,
   ): Promise<ChatSource> {
     messages = this.trimHistory(messages);
     const grounded = this.withContext(system, contextData);
     if (cfg.mode === 'agent-api' && cfg.agent?.url) {
-      const reply = await this.callAgentApi(cfg, grounded, messages, contextData, conversationId);
+      const reply = await this.callAgentApi(cfg, grounded, messages, contextData, conversationId, identity);
       onDelta(reply);
       return 'agent-api';
     }
@@ -249,7 +251,7 @@ export class AgentService {
     return this.extractReply(res.data);
   }
 
-  private async callAgentApi(cfg: AppAiConfig, system: string, messages: ChatMessage[], contextData?: unknown, conversationId?: string): Promise<string> {
+  private async callAgentApi(cfg: AppAiConfig, system: string, messages: ChatMessage[], contextData?: unknown, conversationId?: string, identity?: RequestIdentity): Promise<string> {
     const agent = cfg.agent!;
     await assertSafeUrl(agent.url); // SSRF guard: external agent endpoint is user-supplied
     const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(agent.extraHeaders || {}) };
@@ -257,6 +259,8 @@ export class AgentService {
       if (agent.authHeader) headers[agent.authHeader] = agent.apiKey;
       else headers['Authorization'] = `Bearer ${agent.apiKey}`;
     }
+    // Forward the signed end-user assertion so the agent can authenticate who is chatting.
+    if (identity?.assertion) headers['X-UIFactory-User'] = identity.assertion;
     const last = [...messages].reverse().find((m) => m.role === 'user');
     const res = await axios.post(
       agent.url,
@@ -267,6 +271,9 @@ export class AgentService {
         // Convenience fields so simple conversation APIs work without parsing the full transcript.
         conversationId: conversationId ?? null,
         message: last?.content ?? '',
+        // Server-trusted end-user identity (also signed in the X-UIFactory-User header).
+        user: identity?.context ?? null,
+        userAssertion: identity?.assertion ?? null,
       },
       { headers, timeout: 30000, validateStatus: () => true },
     );

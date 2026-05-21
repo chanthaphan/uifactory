@@ -5,6 +5,8 @@ import { DataSourcesService } from '../datasources/datasources.service';
 import { AppAccessService } from '../apps/app-access.service';
 import { CreateQueryDto, UpdateQueryDto } from './dto/query.dto';
 import { LIMITS } from '../common/limits';
+import { buildIdentity } from '../common/identity.util';
+import { RequestIdentity } from '../execution/execution.types';
 import { AuthUser } from '../auth/auth.types';
 
 @Injectable()
@@ -98,7 +100,7 @@ export class QueriesService {
   /** Editor "Run query" in the data panel. */
   async runChecked(id: string, user: AuthUser, params?: Record<string, unknown>) {
     const row = await this.assertCanManage(id, user);
-    return this.runInternal(row, params, user.id);
+    return this.runInternal(row, params, user.id, buildIdentity(user));
   }
 
   /** Editor ad-hoc run against one of the app's data sources. */
@@ -106,19 +108,19 @@ export class QueriesService {
     await this.access.assertCanEdit(appId, user);
     await this.assertDataSourceInApp(dataSourceId, appId);
     const ds = await this.dataSources.getRawForUser(dataSourceId, user.id);
-    return this.execution.run(ds.type, ds.parsedConfig, config);
+    return this.execution.run(ds.type, ds.parsedConfig, config, undefined, buildIdentity(user));
   }
 
   /** Internal run used by the app runtime (access enforced at the app layer). Resolves the caller's per-user credential. */
-  async run(id: string, params?: Record<string, unknown>, userId?: string) {
+  async run(id: string, params?: Record<string, unknown>, userId?: string, identity?: RequestIdentity) {
     const q = await this.prisma.query.findUnique({ where: { id } });
     if (!q) throw new NotFoundException(`Query ${id} not found`);
-    return this.runInternal(q, params, userId);
+    return this.runInternal(q, params, userId, identity);
   }
 
-  private async runInternal(q: { dataSourceId: string; config: string }, params?: Record<string, unknown>, userId?: string) {
+  private async runInternal(q: { dataSourceId: string; config: string }, params?: Record<string, unknown>, userId?: string, identity?: RequestIdentity) {
     const ds = await this.dataSources.getRawForUser(q.dataSourceId, userId);
     const config = JSON.parse(q.config) as Record<string, unknown>;
-    return this.execution.run(ds.type, ds.parsedConfig, config, params);
+    return this.execution.run(ds.type, ds.parsedConfig, config, params, identity);
   }
 }

@@ -12,16 +12,22 @@ import CredentialsManager from './CredentialsManager';
 
 const TYPE_LABEL: Record<DataSourceType, string> = { REST: 'REST API', POSTGRES: 'PostgreSQL', SQLITE: 'SQLite', MSGRAPH: 'Microsoft 365' };
 
-function dsConfigFromForm(type: DataSourceType, f: { baseUrl: string; connectionString: string; file: string; headers: string }): Record<string, unknown> {
+function dsConfigFromForm(type: DataSourceType, f: { baseUrl: string; connectionString: string; file: string; headers: string; forwardIdentity: boolean; identityHeader: string }): Record<string, unknown> {
   if (type === 'REST') {
     const cfg: Record<string, unknown> = { baseUrl: f.baseUrl.trim() };
     if (f.headers.trim()) cfg.headers = JSON.parse(f.headers);
+    if (f.forwardIdentity) {
+      cfg.forwardIdentity = true;
+      if (f.identityHeader.trim()) cfg.identityHeader = f.identityHeader.trim();
+    }
     return cfg;
   }
   if (type === 'POSTGRES') return { connectionString: f.connectionString.trim() };
   if (type === 'MSGRAPH') return {};
   return { file: f.file.trim() };
 }
+
+const EMPTY_DS_FORM = { baseUrl: '', connectionString: '', file: '', headers: '', forwardIdentity: false, identityHeader: '' };
 
 export default function DataPanel({ appId, open, onClose, onChanged }: { appId: string; open: boolean; onClose: () => void; onChanged: () => void }) {
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
@@ -34,7 +40,7 @@ export default function DataPanel({ appId, open, onClose, onChanged }: { appId: 
   // data source form
   const [dsName, setDsName] = useState('');
   const [dsType, setDsType] = useState<DataSourceType>('SQLITE');
-  const [dsForm, setDsForm] = useState({ baseUrl: '', connectionString: '', file: '', headers: '' });
+  const [dsForm, setDsForm] = useState({ ...EMPTY_DS_FORM });
   const [dsAuthMode, setDsAuthMode] = useState<DataSourceAuthMode>('shared');
 
   // query form
@@ -62,7 +68,7 @@ export default function DataPanel({ appId, open, onClose, onChanged }: { appId: 
     setError('');
     try {
       await api.createDataSource(appId, { name: dsName.trim(), type: dsType, config: dsConfigFromForm(dsType, dsForm), authMode: dsAuthMode });
-      setDsName(''); setDsForm({ baseUrl: '', connectionString: '', file: '', headers: '' }); setDsAuthMode('shared');
+      setDsName(''); setDsForm({ ...EMPTY_DS_FORM }); setDsAuthMode('shared');
       load(); onChanged(); notify('Data source added');
     } catch (e) { setError(api.errMessage(e)); }
   };
@@ -163,6 +169,20 @@ export default function DataPanel({ appId, open, onClose, onChanged }: { appId: 
               control={<Switch size="small" checked={dsAuthMode === 'per-user'} onChange={(e) => setDsAuthMode(e.target.checked ? 'per-user' : 'shared')} />}
               label={<Typography variant="caption">Each user provides their own credentials{dsType === 'REST' ? ' (token/header)' : ' (connection string)'}</Typography>}
             />
+          )}
+          {dsType === 'REST' && (
+            <>
+              <FormControlLabel
+                control={<Switch size="small" checked={dsForm.forwardIdentity} onChange={(e) => setDsForm({ ...dsForm, forwardIdentity: e.target.checked })} />}
+                label={<Typography variant="caption">Forward signed user identity (a JWT the API can verify)</Typography>}
+              />
+              {dsForm.forwardIdentity && (
+                <TextField size="small" label="Identity header name" placeholder="X-UIFactory-User" value={dsForm.identityHeader} onChange={(e) => setDsForm({ ...dsForm, identityHeader: e.target.value })} />
+              )}
+              <Typography variant="caption" color="text.secondary">
+                Queries can also use <code>{'{{user_email}}'}</code>, <code>{'{{user_id}}'}</code>, <code>{'{{user_name}}'}</code> in the path/body — the platform fills these from the signed-in user.
+              </Typography>
+            </>
           )}
           <Stack direction="row" spacing={1}>
             <Button size="small" onClick={testNew}>Test</Button>

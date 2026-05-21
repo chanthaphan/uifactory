@@ -134,6 +134,11 @@ frontend/   React + Vite: Login, Catalog, Build (multi-page editor), Data Source
   can't see, run, or delete others' private connections.
 - **Secrets at rest** — data source configs and per-app AI/agent keys are AES-256-GCM encrypted
   (`SECRETS_KEY`) and redacted in API responses.
+- **User credentials** — a data source can require **per-user credentials** (each user stores their
+  own secret, encrypted per user) instead of one shared secret. Alternatively, REST sources can
+  **forward a signed user-identity assertion** (a short-lived JWT in `X-UIFactory-User`) and fill
+  server-trusted `{{user_email}}` / `{{user_id}}` template values — these are injected from the
+  authenticated session and cannot be spoofed by the sandboxed UI.
 - **SSRF protection** — REST/agent/LLM URLs that resolve to private/reserved IPs are blocked
   (`ALLOW_PRIVATE_NETWORK` / `OUTBOUND_ALLOWLIST` to override).
 - **Query allowlist** — at runtime an app can only execute the queries referenced in its definition;

@@ -8,6 +8,7 @@ import { GenerateUiDto } from '../ai/dto/generate.dto';
 import { ConversationsService } from '../conversations/conversations.service';
 import { LIMITS, countWords } from '../common/limits';
 import { RateLimiter } from '../common/rate-limiter';
+import { buildIdentity } from '../common/identity.util';
 import { AuthUser } from '../auth/auth.types';
 import { CreateAppDto, SharingDto, UpdateAppDto } from './dto/app.dto';
 import {
@@ -373,7 +374,7 @@ export class AppsService {
     if (!page) throw new NotFoundException('Page not found');
     const queryId = page.queryId || page.chat?.queryId;
     if (!queryId) return { data: null };
-    const result = await this.queries.run(queryId, undefined, user?.id);
+    const result = await this.queries.run(queryId, undefined, user?.id, buildIdentity(user));
     return { data: result.data, meta: result.meta };
   }
 
@@ -409,7 +410,7 @@ export class AppsService {
     if (def.allowWriteActions === false && !this.canEdit(app, user) && (await this.isMutationQuery(queryId))) {
       throw new ForbiddenException('You are not allowed to run write actions on this app');
     }
-    const result = await this.queries.run(queryId, body.params, user?.id);
+    const result = await this.queries.run(queryId, body.params, user?.id, buildIdentity(user));
     return { data: result.data, meta: result.meta };
   }
 
@@ -434,7 +435,7 @@ export class AppsService {
     const queryId = page?.chat?.queryId;
     if (queryId) {
       try {
-        contextData = (await this.queries.run(queryId, undefined, user?.id)).data;
+        contextData = (await this.queries.run(queryId, undefined, user?.id, buildIdentity(user))).data;
       } catch {
         contextData = undefined;
       }
@@ -462,7 +463,7 @@ export class AppsService {
     const doPersist = Boolean(persist && user);
     let convId = conversationId;
     if (doPersist) convId = await this.conversations.ensure(app.id, pageId, user!.id, conversationId, this.lastUserMessage(messages));
-    const result = await this.agent.chat(this.aiConfigOf(app), system, messages, contextData, convId ?? conversationId);
+    const result = await this.agent.chat(this.aiConfigOf(app), system, messages, contextData, convId ?? conversationId, buildIdentity(user));
     if (doPersist && convId) await this.conversations.appendTurn(convId, this.lastUserMessage(messages), result.reply);
     return { ...result, conversationId: doPersist ? convId : undefined };
   }
@@ -493,6 +494,7 @@ export class AppsService {
       (d) => { full += d; onDelta(d); },
       contextData,
       convId ?? conversationId,
+      buildIdentity(user),
     );
     if (doPersist && convId) await this.conversations.appendTurn(convId, this.lastUserMessage(messages), full);
     return { source, conversationId: doPersist ? convId : undefined };
