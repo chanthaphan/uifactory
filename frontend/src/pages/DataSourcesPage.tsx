@@ -12,11 +12,13 @@ const TYPE_LABEL: Record<DataSourceType, string> = {
   REST: 'REST API',
   POSTGRES: 'PostgreSQL',
   SQLITE: 'SQLite',
+  MSGRAPH: 'Microsoft 365',
 };
-const TYPE_COLOR: Record<DataSourceType, 'primary' | 'secondary' | 'warning'> = {
+const TYPE_COLOR: Record<DataSourceType, 'primary' | 'secondary' | 'warning' | 'info'> = {
   REST: 'primary',
   POSTGRES: 'secondary',
   SQLITE: 'warning',
+  MSGRAPH: 'info',
 };
 
 interface FormState {
@@ -43,6 +45,7 @@ function buildConfig(f: FormState): Record<string, unknown> {
     return cfg;
   }
   if (f.type === 'POSTGRES') return { connectionString: f.connectionString.trim() };
+  if (f.type === 'MSGRAPH') return {};
   return { file: f.file.trim() };
 }
 
@@ -183,7 +186,16 @@ export default function DataSourcesPage() {
               <MenuItem value="REST">REST API</MenuItem>
               <MenuItem value="POSTGRES">PostgreSQL</MenuItem>
               <MenuItem value="SQLITE">SQLite</MenuItem>
+              <MenuItem value="MSGRAPH">Microsoft 365 (Graph)</MenuItem>
             </TextField>
+
+            {form.type === 'MSGRAPH' && (
+              <Alert severity="info">
+                Uses the platform's Azure AD app (client-credentials) to call Microsoft Graph. Queries set a Graph path
+                like <code>users</code>, <code>groups</code>, or <code>me/messages</code>. Without Azure configured, a
+                dev mock returns sample data.
+              </Alert>
+            )}
 
             {form.type === 'REST' && (
               <>

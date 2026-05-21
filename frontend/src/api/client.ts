@@ -16,7 +16,7 @@ http.interceptors.response.use(
 );
 
 // ---- shared types ----
-export type DataSourceType = 'REST' | 'POSTGRES' | 'SQLITE';
+export type DataSourceType = 'REST' | 'POSTGRES' | 'SQLITE' | 'MSGRAPH';
 export type Role = 'admin' | 'member';
 export type AiProviderName = 'anthropic' | 'openai' | 'azure-openai';
 export type PageType = 'ui' | 'chat';
