@@ -400,12 +400,13 @@ export default function AppEditorPage() {
     const pageName = def.pages.find((p) => p.id === pageId)?.name || 'page';
     setGenStatus((s) => ({ ...s, [pageId]: { state: 'running' } }));
     try {
-      const res = await api.generateUi({
+      const res = await api.generateUi(id, {
         prompt: opts.prompt,
         sample: opts.sample,
         queryName: opts.queryName,
         currentHtml: opts.currentHtml,
         dataGuidance: opts.dataGuidance,
+        guidelines: def.buildGuidelines,
       });
       patchPage(pageId, { html: res.html, prompt: opts.storePrompt, queryId: opts.queryId, editorMode: 'ai' });
       setGenStatus((s) => ({ ...s, [pageId]: { state: 'done' } }));
@@ -596,6 +597,19 @@ export default function AppEditorPage() {
             <Box>
               <Typography variant="subtitle2" gutterBottom>AI / agent connection</Typography>
               <AiConnectionForm value={aiConfig} onChange={(c) => { setAiConfig(c); setDirty(true); }} />
+            </Box>
+            <Box>
+              <Typography variant="subtitle2" gutterBottom>Build guidelines</Typography>
+              <TextField
+                fullWidth multiline minRows={4} size="small"
+                placeholder={'AGENTS.md / CLAUDE.md style. e.g.\n- Use our brand color for headers\n- Prefer tables with sticky headers\n- All money uses 2 decimals and a $ prefix'}
+                value={(def.buildGuidelines as string) || ''}
+                onChange={(e) => { setDef({ ...def, buildGuidelines: e.target.value }); setDirty(true); }}
+              />
+              <Typography variant="caption" color="text.secondary">
+                Conventions fed to the AI/agent for both UI generation and chat. When the AI connection is an
+                external agent API, generation is routed through it (so it can use its own coding skills).
+              </Typography>
             </Box>
             <Box>
               <Typography variant="subtitle2" gutterBottom>Permissions</Typography>

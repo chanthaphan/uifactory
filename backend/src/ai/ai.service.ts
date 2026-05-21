@@ -5,7 +5,7 @@ import { AiProviderName, defaultModel, detectProviderName, resolveProvider } fro
 
 export interface GenerateUiResult {
   html: string;
-  source: 'ai' | 'fallback';
+  source: 'ai' | 'agent-api' | 'fallback';
   provider?: AiProviderName;
   model?: string;
   note?: string;
@@ -53,23 +53,21 @@ export class AiService {
     };
   }
 
-  async generateUi(dto: GenerateUiDto): Promise<GenerateUiResult> {
+  /** System prompt for generation, optionally augmented with the app's build guidelines. */
+  systemPrompt(guidelines?: string): string {
+    const g = guidelines?.trim();
+    if (!g) return SYSTEM_PROMPT;
+    return `${SYSTEM_PROMPT}\n\nPROJECT BUILD GUIDELINES (the app owner's conventions — follow them precisely; they override the defaults above where they conflict):\n${g.slice(0, 8000)}`;
+  }
+
+  /** Build the user message for a generate/refine request. */
+  buildUserContent(dto: GenerateUiDto): string {
     const truncatedSample = this.truncateSample(dto.sample);
-    const provider = resolveProvider();
-
-    if (!provider) {
-      return {
-        html: buildFallbackHtml(dto.prompt, truncatedSample, dto.queryName),
-        source: 'fallback',
-        note: 'No AI provider is configured, so a built-in template was used. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or the AZURE_OPENAI_* variables to use an LLM.',
-      };
-    }
-
     const refine = dto.currentHtml && dto.currentHtml.trim().length > 0;
     const guidance = dto.dataGuidance?.trim()
       ? ['', 'Data / API guidance (how to interpret and use this data):', dto.dataGuidance.trim()]
       : [];
-    const userContent = (
+    return (
       refine
         ? [
             `Apply this change to the existing app page and return the COMPLETE updated HTML document: ${dto.prompt}`,
@@ -99,21 +97,35 @@ export class AiService {
     )
       .filter(Boolean)
       .join('\n');
+  }
 
+  /** Strip fences and confirm the text looks like HTML; null if it doesn't. */
+  finalizeHtml(text: string): string | null {
+    const html = this.stripFences(text || '');
+    return html.toLowerCase().includes('<') ? html : null;
+  }
+
+  /** Built-in template result, used when no AI/agent is available or it failed. */
+  fallbackResult(dto: GenerateUiDto, note?: string): GenerateUiResult {
+    return {
+      html: buildFallbackHtml(dto.prompt, this.truncateSample(dto.sample), dto.queryName),
+      source: 'fallback',
+      note: note ?? 'No AI provider is configured, so a built-in template was used. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or the AZURE_OPENAI_* variables (or an app provider key / agent API) to use an LLM.',
+    };
+  }
+
+  /** Platform-LLM generation (used by the stateless /ai/generate-ui route). */
+  async generateUi(dto: GenerateUiDto): Promise<GenerateUiResult> {
+    const provider = resolveProvider();
+    if (!provider) return this.fallbackResult(dto);
     try {
-      const text = await provider.generate(SYSTEM_PROMPT, userContent);
-      const html = this.stripFences(text);
-      if (!html.toLowerCase().includes('<')) {
-        throw new Error('Model did not return HTML');
-      }
+      const text = await provider.generate(this.systemPrompt(dto.guidelines), this.buildUserContent(dto));
+      const html = this.finalizeHtml(text);
+      if (!html) throw new Error('Model did not return HTML');
       return { html, source: 'ai', provider: provider.name, model: provider.model };
     } catch (err) {
       this.logger.warn(`${provider.name} generation failed, using fallback: ${(err as Error).message}`);
-      return {
-        html: buildFallbackHtml(dto.prompt, truncatedSample, dto.queryName),
-        source: 'fallback',
-        note: `${provider.name} request failed (${(err as Error).message}); used the built-in template instead.`,
-      };
+      return this.fallbackResult(dto, `${provider.name} request failed (${(err as Error).message}); used the built-in template instead.`);
     }
   }
 

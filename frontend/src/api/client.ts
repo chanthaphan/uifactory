@@ -67,7 +67,7 @@ export interface ExecutionResult {
 }
 export interface GenerateUiResult {
   html: string;
-  source: 'ai' | 'fallback';
+  source: 'ai' | 'agent-api' | 'fallback';
   provider?: AiProviderName;
   model?: string;
   note?: string;
@@ -129,6 +129,7 @@ export interface AppDefinition {
   pages: AppPage[];
   theme?: Record<string, unknown>;
   allowWriteActions?: boolean;
+  buildGuidelines?: string;
 }
 export interface AppAiConfig {
   mode: 'platform' | 'provider' | 'agent-api';
@@ -272,8 +273,9 @@ export const api = {
 
   // ai
   aiStatus: () => http.get<AiStatus>('/ai/status').then((r) => r.data),
-  generateUi: (body: { prompt: string; sample: string; queryName?: string; currentHtml?: string; dataGuidance?: string }) =>
-    http.post<GenerateUiResult>('/ai/generate-ui', body).then((r) => r.data),
+  /** App-scoped generation: uses the app's agent API / provider key / platform LLM + build guidelines. */
+  generateUi: (appId: string, body: { prompt: string; sample: string; queryName?: string; currentHtml?: string; dataGuidance?: string; guidelines?: string }) =>
+    http.post<GenerateUiResult>(`/apps/${appId}/generate-ui`, body).then((r) => r.data),
 
   // apps
   listMyApps: () => http.get<AppSummary[]>('/apps').then((r) => r.data),
@@ -297,4 +299,43 @@ export const api = {
     http.post<{ data: unknown; meta?: unknown }>(`/apps/${id}/run-query`, body).then((r) => r.data),
   chat: (id: string, body: { pageId?: string; messages: ChatMessage[]; conversationId?: string }) =>
     http.post<{ reply: string; source: string }>(`/apps/${id}/chat`, body).then((r) => r.data),
+
+  /** Streaming chat: calls onDelta with each text chunk; resolves with the responder source. */
+  chatStream: async (
+    id: string,
+    body: { pageId?: string; messages: ChatMessage[]; conversationId?: string },
+    onDelta: (text: string) => void,
+  ): Promise<{ source?: string }> => {
+    const res = await fetch(`/api/apps/${id}/chat/stream`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 401) {
+      window.dispatchEvent(new CustomEvent('uifactory:unauthorized'));
+      throw new Error('Session expired');
+    }
+    if (!res.ok || !res.body) throw new Error(`Chat failed (${res.status})`);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let source: string | undefined;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (!line) continue;
+        const obj = JSON.parse(line) as { delta?: string; done?: boolean; source?: string; error?: string };
+        if (obj.error) throw new Error(obj.error);
+        if (obj.delta) onDelta(obj.delta);
+        if (obj.source) source = obj.source;
+      }
+    }
+    return { source };
+  },
 };

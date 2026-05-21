@@ -56,6 +56,8 @@ export interface AppDefinition {
   theme?: Record<string, unknown>;
   /** When false, only editors/owner/admin may run write (mutation) actions. Default: allow. */
   allowWriteActions?: boolean;
+  /** AGENTS.md/CLAUDE.md-style build guidelines fed to the AI/agent for generation and chat. */
+  buildGuidelines?: string;
 }
 
 export type AiMode = 'platform' | 'provider' | 'agent-api';
@@ -98,6 +100,7 @@ export function normalizeDefinition(raw: unknown): AppDefinition {
       pages: def.pages as AppPage[],
       theme: def.theme as Record<string, unknown> | undefined,
       allowWriteActions: def.allowWriteActions as boolean | undefined,
+      buildGuidelines: def.buildGuidelines as string | undefined,
     };
   }
   // Legacy: { html, queryId?, prompt?, sample? } -> one ui page.

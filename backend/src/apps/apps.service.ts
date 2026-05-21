@@ -3,6 +3,8 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { QueriesService } from '../queries/queries.service';
 import { AgentService, ChatMessage } from './agent.service';
+import { AiService, GenerateUiResult } from '../ai/ai.service';
+import { GenerateUiDto } from '../ai/dto/generate.dto';
 import { AuthUser } from '../auth/auth.types';
 import { CreateAppDto, SharingDto, UpdateAppDto } from './dto/app.dto';
 import {
@@ -28,6 +30,7 @@ export class AppsService {
     private readonly prisma: PrismaService,
     private readonly queries: QueriesService,
     private readonly agent: AgentService,
+    private readonly ai: AiService,
   ) {}
 
   private include = { owner: true, memberships: true } as const;
@@ -386,14 +389,14 @@ export class AppsService {
     return (cfg.method || 'GET').toUpperCase() !== 'GET';
   }
 
-  async chat(id: string, pageId: string | undefined, messages: ChatMessage[], user?: AuthUser, conversationId?: string) {
-    const app = await this.getOrThrow(id);
-    this.assertRunnable(app, user);
-
+  /** Compose the chat system prompt + grounding data for a page (shared by chat + chatStream). */
+  private async chatContext(app: AppWith, pageId: string | undefined, user?: AuthUser) {
     const def = this.runtimeDefinition(app, user);
     const page = pageId ? def.pages.find((p) => p.id === pageId) : def.pages.find((p) => p.type === 'chat');
-    const system = page?.chat?.systemPrompt || `You are an assistant for the "${app.name}" app.`;
-
+    let system = page?.chat?.systemPrompt || `You are an assistant for the "${app.name}" app.`;
+    if (def.buildGuidelines?.trim()) {
+      system += `\n\nProject guidelines to follow:\n${def.buildGuidelines.trim().slice(0, 8000)}`;
+    }
     let contextData: unknown;
     const queryId = page?.chat?.queryId;
     if (queryId) {
@@ -403,7 +406,75 @@ export class AppsService {
         contextData = undefined;
       }
     }
+    return { system, contextData };
+  }
 
+  async chat(id: string, pageId: string | undefined, messages: ChatMessage[], user?: AuthUser, conversationId?: string) {
+    const app = await this.getOrThrow(id);
+    this.assertRunnable(app, user);
+    const { system, contextData } = await this.chatContext(app, pageId, user);
     return this.agent.chat(this.aiConfigOf(app), system, messages, contextData, conversationId);
+  }
+
+  /** Streaming chat: invokes onDelta with each text chunk. Returns the responder source. */
+  async chatStream(
+    id: string,
+    pageId: string | undefined,
+    messages: ChatMessage[],
+    onDelta: (t: string) => void,
+    user?: AuthUser,
+    conversationId?: string,
+  ) {
+    const app = await this.getOrThrow(id);
+    this.assertRunnable(app, user);
+    const { system, contextData } = await this.chatContext(app, pageId, user);
+    return this.agent.chatStream(this.aiConfigOf(app), system, messages, onDelta, contextData, conversationId);
+  }
+
+  /**
+   * Generate a UI page for an app using its configured AI: an external coding agent (agent-api),
+   * the app's own provider key, or the platform LLM — augmented with the app's build guidelines.
+   */
+  async generateUi(id: string, dto: GenerateUiDto, user: AuthUser): Promise<GenerateUiResult> {
+    const app = await this.getOrThrow(id);
+    if (!this.canEdit(app, user)) throw new ForbiddenException('You cannot edit this app');
+
+    const def = normalizeDefinition(JSON.parse(app.definition));
+    const guidelines = dto.guidelines ?? def.buildGuidelines;
+    const effectiveDto: GenerateUiDto = { ...dto, guidelines };
+    const cfg = this.aiConfigOf(app);
+
+    // 1) External coding agent (can sync with its own skills + the guidelines we pass it).
+    if (cfg.mode === 'agent-api' && cfg.agent?.url) {
+      try {
+        const text = await this.agent.generateUiViaAgent(cfg, {
+          prompt: dto.prompt,
+          sample: dto.sample,
+          currentHtml: dto.currentHtml,
+          dataGuidance: dto.dataGuidance,
+          guidelines,
+          queryName: dto.queryName,
+        });
+        const html = this.ai.finalizeHtml(text);
+        if (html) return { html, source: 'agent-api' };
+        return this.ai.fallbackResult(effectiveDto, 'The agent API did not return HTML; used the built-in template instead.');
+      } catch (err) {
+        return this.ai.fallbackResult(effectiveDto, `Agent API request failed (${(err as Error).message}); used the built-in template instead.`);
+      }
+    }
+
+    // 2) App's own provider key, or 3) platform default LLM.
+    try {
+      const result = await this.agent.complete(cfg, this.ai.systemPrompt(guidelines), this.ai.buildUserContent(effectiveDto));
+      if (result) {
+        const html = this.ai.finalizeHtml(result.text);
+        if (html) return { html, source: 'ai' };
+        return this.ai.fallbackResult(effectiveDto, 'The model did not return HTML; used the built-in template instead.');
+      }
+    } catch (err) {
+      return this.ai.fallbackResult(effectiveDto, `AI request failed (${(err as Error).message}); used the built-in template instead.`);
+    }
+    // No provider anywhere -> template.
+    return this.ai.fallbackResult(effectiveDto);
   }
 }

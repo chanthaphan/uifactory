@@ -24,4 +24,9 @@ export class GenerateUiDto {
   @IsOptional()
   @IsString()
   dataGuidance?: string;
+
+  /** App-level build guidelines (AGENTS.md/CLAUDE.md style) to enforce conventions during generation. */
+  @IsOptional()
+  @IsString()
+  guidelines?: string;
 }

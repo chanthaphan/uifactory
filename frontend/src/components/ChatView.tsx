@@ -70,15 +70,24 @@ export default function ChatView({ appId, pageId, greeting }: Props) {
   const send = async () => {
     const text = input.trim();
     if (!text || busy) return;
-    const next = [...messages, { role: 'user' as const, content: text }];
-    setMessages(next);
+    const base = [...messages, { role: 'user' as const, content: text }];
+    // Show the user message immediately plus an empty assistant bubble we stream into.
+    setMessages([...base, { role: 'assistant', content: '' }]);
     setInput('');
     setBusy(true);
+    let acc = '';
     try {
-      const res = await api.chat(appId, { pageId, conversationId, messages: next.filter((m) => m.role !== 'system') });
-      setMessages([...next, { role: 'assistant', content: res.reply }]);
+      await api.chatStream(
+        appId,
+        { pageId, conversationId, messages: base.filter((m) => m.role !== 'system') },
+        (delta) => {
+          acc += delta;
+          setMessages([...base, { role: 'assistant', content: acc }]);
+        },
+      );
+      if (!acc) setMessages([...base, { role: 'assistant', content: '(no response)' }]);
     } catch (e) {
-      setMessages([...next, { role: 'assistant', content: `Error: ${api.errMessage(e)}` }]);
+      setMessages([...base, { role: 'assistant', content: `Error: ${api.errMessage(e)}` }]);
     } finally {
       setBusy(false);
     }
