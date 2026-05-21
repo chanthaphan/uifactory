@@ -46,6 +46,8 @@ interface Props {
   persistHistory?: boolean;
 }
 
+const MAX_CHAT_WORDS = 5000;
+
 function makeConversationId(): string {
   try {
     if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
@@ -123,9 +125,12 @@ export default function ChatView({ appId, pageId, greeting, persistHistory }: Pr
     else startNewChat();
   };
 
+  const wordCount = (input.trim().match(/\S+/g) || []).length;
+  const overLimit = wordCount > MAX_CHAT_WORDS;
+
   const send = async () => {
     const text = input.trim();
-    if (!text || busy) return;
+    if (!text || busy || overLimit) return;
     const base = [...messages, { role: 'user' as const, content: text }];
     // Show the user message immediately plus an empty assistant bubble we stream into.
     setMessages([...base, { role: 'assistant', content: '' }]);
@@ -196,13 +201,15 @@ export default function ChatView({ appId, pageId, greeting, persistHistory }: Pr
         </Stack>
       </Box>
       <Box sx={{ p: 1.5, borderTop: '1px solid', borderColor: 'divider', bgcolor: '#fff' }}>
-        <Stack direction="row" spacing={1}>
+        <Stack direction="row" spacing={1} alignItems="flex-start">
           <TextField
             fullWidth size="small" placeholder="Type a message…" value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+            error={overLimit}
+            helperText={overLimit ? `Message too long: ${wordCount.toLocaleString()} / ${MAX_CHAT_WORDS.toLocaleString()} words` : (wordCount > MAX_CHAT_WORDS * 0.8 ? `${wordCount.toLocaleString()} / ${MAX_CHAT_WORDS.toLocaleString()} words` : ' ')}
           />
-          <IconButton color="primary" onClick={send} disabled={busy || !input.trim()}>
+          <IconButton color="primary" onClick={send} disabled={busy || !input.trim() || overLimit}>
             <SendIcon />
           </IconButton>
         </Stack>

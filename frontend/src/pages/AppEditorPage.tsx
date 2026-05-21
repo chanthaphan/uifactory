@@ -249,7 +249,9 @@ function UiPageEditor({ appId, page, brandColor, status, onGenerate, onPatch, da
                   </Stack>
                 )}
                 {status?.state === 'running' && <Alert severity="info" icon={<CircularProgress size={16} />}>Generating this page… you can switch pages; it keeps running.</Alert>}
-                {status?.state === 'done' && <Alert severity="success" sx={{ py: 0 }}>Generation finished.</Alert>}
+                {status?.state === 'done' && (status.message
+                  ? <Alert severity="warning">{status.message}</Alert>
+                  : <Alert severity="success" sx={{ py: 0 }}>Generation finished.</Alert>)}
                 {status?.state === 'error' && <Alert severity="error">{status.message || 'Generation failed'}</Alert>}
                 <Divider />
                 <Typography variant="overline">Add a component</Typography>
@@ -409,8 +411,14 @@ export default function AppEditorPage() {
         guidelines: def.buildGuidelines,
       });
       patchPage(pageId, { html: res.html, prompt: opts.storePrompt, queryId: opts.queryId, editorMode: 'ai' });
-      setGenStatus((s) => ({ ...s, [pageId]: { state: 'done' } }));
-      setToast(`"${pageName}": UI generated`);
+      const fellBack = res.source === 'fallback';
+      setGenStatus((s) => ({
+        ...s,
+        [pageId]: fellBack
+          ? { state: 'done', message: res.note || 'The AI was unavailable, so a built-in template was used. Check the app AI settings and try again.' }
+          : { state: 'done' },
+      }));
+      setToast(fellBack ? `"${pageName}": used a template (AI unavailable)` : `"${pageName}": UI generated`);
     } catch (e) {
       setGenStatus((s) => ({ ...s, [pageId]: { state: 'error', message: api.errMessage(e) } }));
       setToast(`"${pageName}": generation failed`);

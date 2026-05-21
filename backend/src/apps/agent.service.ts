@@ -5,6 +5,7 @@ import OpenAI, { AzureOpenAI } from 'openai';
 import { AppAiConfig } from './app-defs';
 import { detectProviderName, defaultModel } from '../ai/ai.providers';
 import { assertSafeUrl } from '../common/safe-url';
+import { LIMITS } from '../common/limits';
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
@@ -42,8 +43,23 @@ const MAX_TOKENS = 1500;
 export class AgentService {
   private readonly logger = new Logger(AgentService.name);
 
+  /** Keep the most recent turns within a character budget so long histories don't overflow context. */
+  private trimHistory(messages: ChatMessage[]): ChatMessage[] {
+    const budget = LIMITS.chatHistoryCharBudget;
+    const out: ChatMessage[] = [];
+    let total = 0;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const len = messages[i].content?.length ?? 0;
+      if (out.length && total + len > budget) break;
+      out.unshift(messages[i]);
+      total += len;
+    }
+    return out;
+  }
+
   /** Run a chat turn using the app's AI/agent connection (or the platform default, or a mock). */
   async chat(cfg: AppAiConfig, system: string, messages: ChatMessage[], contextData?: unknown, conversationId?: string): Promise<ChatResult> {
+    messages = this.trimHistory(messages);
     const grounded = this.withContext(system, contextData);
 
     if (cfg.mode === 'agent-api' && cfg.agent?.url) {
@@ -190,6 +206,7 @@ export class AgentService {
     contextData?: unknown,
     conversationId?: string,
   ): Promise<ChatSource> {
+    messages = this.trimHistory(messages);
     const grounded = this.withContext(system, contextData);
     if (cfg.mode === 'agent-api' && cfg.agent?.url) {
       const reply = await this.callAgentApi(cfg, grounded, messages, contextData, conversationId);

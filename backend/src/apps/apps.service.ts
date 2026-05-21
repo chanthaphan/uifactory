@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { QueriesService } from '../queries/queries.service';
@@ -6,6 +6,7 @@ import { AgentService, ChatMessage } from './agent.service';
 import { AiService, GenerateUiResult } from '../ai/ai.service';
 import { GenerateUiDto } from '../ai/dto/generate.dto';
 import { ConversationsService } from '../conversations/conversations.service';
+import { LIMITS, countWords } from '../common/limits';
 import { AuthUser } from '../auth/auth.types';
 import { CreateAppDto, SharingDto, UpdateAppDto } from './dto/app.dto';
 import {
@@ -256,6 +257,13 @@ export class AppsService {
       const updated = await this.prisma.app.update({ where: { id }, data: { status: 'draft' }, include: this.include });
       return this.serialize(updated, user);
     }
+    // Cap how many apps a single owner can have deployed at once (viewing remains unlimited).
+    if (app.status !== 'deployed') {
+      const deployedCount = await this.prisma.app.count({ where: { ownerId: app.ownerId, status: 'deployed' } });
+      if (deployedCount >= LIMITS.maxDeployedAppsPerUser) {
+        throw new ForbiddenException(`Deploy limit reached: ${LIMITS.maxDeployedAppsPerUser} deployed apps per user. Undeploy another app first.`);
+      }
+    }
     const nextVersion = app.version + 1;
     const [, updated] = await this.prisma.$transaction([
       this.prisma.appVersion.create({
@@ -415,9 +423,17 @@ export class AppsService {
     return [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
   }
 
+  private assertChatInputWithinLimit(messages: ChatMessage[]) {
+    const words = countWords(this.lastUserMessage(messages));
+    if (words > LIMITS.maxChatInputWords) {
+      throw new BadRequestException(`Message too long: ${words} words (max ${LIMITS.maxChatInputWords}).`);
+    }
+  }
+
   async chat(id: string, pageId: string | undefined, messages: ChatMessage[], user?: AuthUser, conversationId?: string, persist?: boolean) {
     const app = await this.getOrThrow(id);
     this.assertRunnable(app, user);
+    this.assertChatInputWithinLimit(messages);
     const { system, contextData } = await this.chatContext(app, pageId, user);
     const doPersist = Boolean(persist && user);
     let convId = conversationId;
@@ -439,6 +455,7 @@ export class AppsService {
   ) {
     const app = await this.getOrThrow(id);
     this.assertRunnable(app, user);
+    this.assertChatInputWithinLimit(messages);
     const { system, contextData } = await this.chatContext(app, pageId, user);
     const doPersist = Boolean(persist && user);
     let convId = conversationId;
