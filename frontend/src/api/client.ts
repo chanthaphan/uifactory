@@ -39,9 +39,13 @@ export interface AuthUser {
 export interface AuthConfig {
   mode: 'azure' | 'dev';
   platformName: string;
+  platformLogo?: string;
+  platformBrandColor?: string;
 }
 export interface PlatformSettings {
   platformName: string;
+  platformLogo: string;
+  platformBrandColor: string;
   defaultAiProvider: string;
   defaultAiModel: string;
   defaultVisibility: Visibility;

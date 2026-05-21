@@ -5,6 +5,8 @@ import {
 } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { api, AdminUser, AppSummary, Connector, DataSourceType, PlatformSettings, TemplateSummary } from '../api/client';
+import { useAuth } from '../auth/AuthContext';
+import BrandLogo from '../components/BrandLogo';
 
 const DS_TYPE_LABEL: Record<DataSourceType, string> = { REST: 'REST API', POSTGRES: 'PostgreSQL', SQLITE: 'SQLite', MSGRAPH: 'Microsoft 365' };
 
@@ -197,6 +199,7 @@ function TemplatesTab() {
 }
 
 function SettingsTab() {
+  const { refresh } = useAuth();
   const [settings, setSettings] = useState<PlatformSettings | null>(null);
   const [toast, setToast] = useState('');
   useEffect(() => { api.getSettings().then(setSettings).catch(() => undefined); }, []);
@@ -205,12 +208,21 @@ function SettingsTab() {
   const save = async () => {
     const updated = await api.updateSettings(settings);
     setSettings(updated);
+    await refresh().catch(() => undefined); // update the nav bar / login branding immediately
     setToast('Settings saved');
   };
 
   return (
     <Stack spacing={2} sx={{ maxWidth: 460 }}>
       <TextField label="Platform name" size="small" value={settings.platformName} onChange={(e) => setSettings({ ...settings, platformName: e.target.value })} />
+      <Stack direction="row" spacing={1.5} alignItems="center">
+        <BrandLogo logo={settings.platformLogo} brandColor={settings.platformBrandColor} name={settings.platformName} size={44} />
+        <TextField fullWidth size="small" label="Platform logo (image URL, or a letter/emoji)" placeholder="https://…/logo.png  or  🏦" value={settings.platformLogo} onChange={(e) => setSettings({ ...settings, platformLogo: e.target.value })} />
+      </Stack>
+      <Stack direction="row" spacing={1.5} alignItems="center">
+        <TextField size="small" label="Brand color (used when no logo image)" placeholder="#3a64f0" value={settings.platformBrandColor} onChange={(e) => setSettings({ ...settings, platformBrandColor: e.target.value })} sx={{ flex: 1 }} />
+        <Box component="input" type="color" value={settings.platformBrandColor || '#3a64f0'} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSettings({ ...settings, platformBrandColor: e.target.value })} sx={{ width: 44, height: 40, border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 0, bgcolor: 'transparent' }} />
+      </Stack>
       <TextField select label="Default visibility for new shares" size="small" value={settings.defaultVisibility} onChange={(e) => setSettings({ ...settings, defaultVisibility: e.target.value as PlatformSettings['defaultVisibility'] })}>
         <MenuItem value="private">private</MenuItem>
         <MenuItem value="org">org</MenuItem>
