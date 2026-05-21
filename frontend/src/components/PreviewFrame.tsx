@@ -52,7 +52,7 @@ const BRIDGE_SCRIPT = `<script>
     refresh: function(){ return call('refresh', []); },
     navigate: function(slug){ parent.postMessage({ source: 'uifactory-app', method: 'navigate', args: [slug] }, '*'); },
     onData: function(cb){ dataCbs.push(cb); try { cb(window.APP_DATA); } catch (_) {} },
-    // framework helpers (Appsmith-style)
+    // framework helpers
     showAlert: function(message, type){ return call('showAlert', [String(message), type || 'info']); },
     confirm: function(message){ return call('confirm', [String(message)]); },
     download: function(filename, content, mime){ return call('download', [filename || 'download', String(content), mime || 'text/plain']); },

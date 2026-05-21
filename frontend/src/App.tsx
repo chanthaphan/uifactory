@@ -9,6 +9,7 @@ import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import LogoutIcon from '@mui/icons-material/Logout';
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext';
+import BrandLogo from './components/BrandLogo';
 import LoginPage from './pages/LoginPage';
 import CatalogPage from './pages/CatalogPage';
 import MyAppsPage from './pages/MyAppsPage';
@@ -31,8 +32,8 @@ function NavBar() {
   return (
     <AppBar position="sticky" color="default" elevation={0} sx={{ borderBottom: '1px solid', borderColor: 'divider', bgcolor: '#fff' }}>
       <Toolbar>
-        <Box sx={{ width: 30, height: 30, borderRadius: 1.5, mr: 1.5, background: 'linear-gradient(135deg,#3a64f0,#7c4dff)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 800 }}>
-          U
+        <Box sx={{ mr: 1.5, display: 'flex' }}>
+          <BrandLogo logo={config?.platformLogo} brandColor={config?.platformBrandColor} name={config?.platformName} size={30} />
         </Box>
         <Typography variant="h6" sx={{ mr: 4 }}>
           {config?.platformName || 'UIFactory'}

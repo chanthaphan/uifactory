@@ -3,6 +3,7 @@ import { Avatar, Box, Button, Card, CardContent, Chip, CircularProgress, Divider
 import MicrosoftIcon from '@mui/icons-material/Window';
 import { api, AdminUser } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
+import BrandLogo from '../components/BrandLogo';
 
 export default function LoginPage() {
   const { config, refresh } = useAuth();
@@ -28,9 +29,7 @@ export default function LoginPage() {
       <Card variant="outlined" sx={{ width: 420, maxWidth: '100%' }}>
         <CardContent sx={{ p: 4 }}>
           <Stack alignItems="center" spacing={1} mb={3}>
-            <Box sx={{ width: 48, height: 48, borderRadius: 2, background: 'linear-gradient(135deg,#3a64f0,#7c4dff)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 24 }}>
-              U
-            </Box>
+            <BrandLogo logo={config?.platformLogo} brandColor={config?.platformBrandColor} name={config?.platformName} size={48} />
             <Typography variant="h5" fontWeight={800}>
               {config?.platformName || 'UIFactory'}
             </Typography>
