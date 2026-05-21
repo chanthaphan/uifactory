@@ -101,7 +101,7 @@ export default function PreviewFrame({ html, data, height = '100%', bridge }: Pr
       ref={ref}
       title="App preview"
       srcDoc={srcDoc}
-      sandbox="allow-scripts allow-popups"
+      sandbox="allow-scripts allow-popups allow-forms"
       sx={{ width: '100%', height, border: 'none', borderRadius: 1, backgroundColor: '#fff', display: 'block' }}
     />
   );
