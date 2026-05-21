@@ -298,8 +298,21 @@ export class AppsService {
     if (!this.allowedQueryIds(def).has(queryId)) {
       throw new ForbiddenException('This query is not part of the app');
     }
+    // Per-app guard: non-editors may run write (mutation) actions only when allowed.
+    if (def.allowWriteActions === false && !this.canEdit(app, user) && (await this.isMutationQuery(queryId))) {
+      throw new ForbiddenException('You are not allowed to run write actions on this app');
+    }
     const result = await this.queries.run(queryId, body.params);
     return { data: result.data, meta: result.meta };
+  }
+
+  /** A query is a "write" if its SQL is not a SELECT/WITH/PRAGMA, or its REST method is not GET. */
+  private async isMutationQuery(queryId: string): Promise<boolean> {
+    const q = await this.prisma.query.findUnique({ where: { id: queryId } });
+    if (!q) return false;
+    const cfg = JSON.parse(q.config) as { sql?: string; method?: string };
+    if (typeof cfg.sql === 'string') return !/^\s*(select|with|pragma)/i.test(cfg.sql);
+    return (cfg.method || 'GET').toUpperCase() !== 'GET';
   }
 
   async chat(id: string, pageId: string | undefined, messages: ChatMessage[], user?: AuthUser) {

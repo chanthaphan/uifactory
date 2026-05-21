@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Alert, Box, Button, Chip, CircularProgress, Divider, Drawer, IconButton, List, ListItemButton,
-  ListItemIcon, ListItemText, MenuItem, Snackbar, Stack, TextField, Tooltip, Typography,
+  Alert, Box, Button, Chip, CircularProgress, Divider, Drawer, FormControlLabel, IconButton, List,
+  ListItemButton, ListItemIcon, ListItemText, MenuItem, Snackbar, Stack, Switch, TextField, Tooltip, Typography,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AddIcon from '@mui/icons-material/Add';
@@ -368,6 +368,21 @@ export default function AppEditorPage() {
             <Box>
               <Typography variant="subtitle2" gutterBottom>AI / agent connection</Typography>
               <AiConnectionForm value={aiConfig} onChange={(c) => { setAiConfig(c); setDirty(true); }} />
+            </Box>
+            <Box>
+              <Typography variant="subtitle2" gutterBottom>Permissions</Typography>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={def.allowWriteActions !== false}
+                    onChange={(e) => { setDef({ ...def, allowWriteActions: e.target.checked }); setDirty(true); }}
+                  />
+                }
+                label="Allow non-editors to run write actions (forms / create / update / delete)"
+              />
+              <Typography variant="caption" color="text.secondary" display="block">
+                When off, viewers and org users can only run read-only actions; editors and admins are unaffected.
+              </Typography>
             </Box>
             <Button variant="contained" startIcon={<SaveIcon />} onClick={() => { save(); setSettingsOpen(false); }}>Save settings</Button>
           </Stack>

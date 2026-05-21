@@ -93,6 +93,7 @@ export interface AppPage {
 export interface AppDefinition {
   pages: AppPage[];
   theme?: Record<string, unknown>;
+  allowWriteActions?: boolean;
 }
 export interface AppAiConfig {
   mode: 'platform' | 'provider' | 'agent-api';
