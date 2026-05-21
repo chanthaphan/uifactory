@@ -67,14 +67,20 @@ export default function AppRunnerPage() {
   if (!app) return <Box sx={{ height: '100vh', display: 'grid', placeItems: 'center' }}><CircularProgress /></Box>;
 
   const page = app.definition.pages[tab];
+  const theme = (app.definition.theme || {}) as { brandColor?: string; brandName?: string };
+  const brand = theme.brandColor || '#0b1f3a';
+  const initial = (theme.brandName || app.name || '?').trim().charAt(0).toUpperCase();
 
   return (
     <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <AppBar position="static" color="default" elevation={0} sx={{ borderBottom: '1px solid', borderColor: 'divider', bgcolor: '#fff' }}>
         <Toolbar variant="dense">
           <IconButton edge="start" onClick={() => navigate('/')}><ArrowBackIcon /></IconButton>
-          <Typography variant="subtitle1" fontWeight={700} sx={{ mr: 3 }}>{app.name}</Typography>
-          <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" sx={{ minHeight: 48 }}>
+          <Box sx={{ width: 26, height: 26, borderRadius: 1.2, mr: 1, bgcolor: brand, color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 14 }}>
+            {initial}
+          </Box>
+          <Typography variant="subtitle1" fontWeight={700} sx={{ mr: 3 }}>{theme.brandName || app.name}</Typography>
+          <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" sx={{ minHeight: 48, '& .Mui-selected': { color: brand }, '& .MuiTabs-indicator': { backgroundColor: brand } }}>
             {app.definition.pages.map((p) => (
               <Tab key={p.id} label={p.name} sx={{ minHeight: 48 }} />
             ))}
