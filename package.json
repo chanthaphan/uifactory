@@ -7,6 +7,9 @@
     "backend",
     "frontend"
   ],
+  "engines": {
+    "node": ">=22.5"
+  },
   "scripts": {
     "install:all": "npm install",
     "setup": "npm run setup --workspace backend",
