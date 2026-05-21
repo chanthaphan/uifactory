@@ -13,6 +13,10 @@ export class CreateDataSourceDto {
 
   @IsObject()
   config!: Record<string, unknown>;
+
+  @IsOptional()
+  @IsIn(['shared', 'per-user'])
+  authMode?: 'shared' | 'per-user';
 }
 
 export class UpdateDataSourceDto {
@@ -28,4 +32,8 @@ export class UpdateDataSourceDto {
   @IsOptional()
   @IsObject()
   config?: Record<string, unknown>;
+
+  @IsOptional()
+  @IsIn(['shared', 'per-user'])
+  authMode?: 'shared' | 'per-user';
 }

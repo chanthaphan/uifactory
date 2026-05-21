@@ -98,26 +98,26 @@ export class QueriesService {
   /** Editor "Run query" in the data panel. */
   async runChecked(id: string, user: AuthUser, params?: Record<string, unknown>) {
     const row = await this.assertCanManage(id, user);
-    return this.runInternal(row, params);
+    return this.runInternal(row, params, user.id);
   }
 
   /** Editor ad-hoc run against one of the app's data sources. */
   async runInline(appId: string, dataSourceId: string, config: Record<string, unknown>, user: AuthUser) {
     await this.access.assertCanEdit(appId, user);
     await this.assertDataSourceInApp(dataSourceId, appId);
-    const ds = await this.dataSources.getRaw(dataSourceId);
+    const ds = await this.dataSources.getRawForUser(dataSourceId, user.id);
     return this.execution.run(ds.type, ds.parsedConfig, config);
   }
 
-  /** Internal run used by the app runtime (access enforced at the app layer). */
-  async run(id: string, params?: Record<string, unknown>) {
+  /** Internal run used by the app runtime (access enforced at the app layer). Resolves the caller's per-user credential. */
+  async run(id: string, params?: Record<string, unknown>, userId?: string) {
     const q = await this.prisma.query.findUnique({ where: { id } });
     if (!q) throw new NotFoundException(`Query ${id} not found`);
-    return this.runInternal(q, params);
+    return this.runInternal(q, params, userId);
   }
 
-  private async runInternal(q: { dataSourceId: string; config: string }, params?: Record<string, unknown>) {
-    const ds = await this.dataSources.getRaw(q.dataSourceId);
+  private async runInternal(q: { dataSourceId: string; config: string }, params?: Record<string, unknown>, userId?: string) {
+    const ds = await this.dataSources.getRawForUser(q.dataSourceId, userId);
     const config = JSON.parse(q.config) as Record<string, unknown>;
     return this.execution.run(ds.type, ds.parsedConfig, config, params);
   }

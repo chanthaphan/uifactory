@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
-import { AppBar, Box, CircularProgress, IconButton, Tab, Tabs, Toolbar, Typography } from '@mui/material';
+import { AppBar, Box, Button, CircularProgress, Dialog, DialogContent, DialogTitle, IconButton, Tab, Tabs, Toolbar, Typography } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import KeyIcon from '@mui/icons-material/Key';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api, AppFull, AppPage } from '../api/client';
 import PreviewFrame, { PreviewBridge } from '../components/PreviewFrame';
 import ChatView from '../components/ChatView';
+import CredentialsManager from '../components/CredentialsManager';
 
 function UiPageRunner({ appId, page, onNavigate }: { appId: string; page: AppPage; onNavigate: (slug: string) => void }) {
   const [data, setData] = useState<unknown>(page.sample ? safeParse(page.sample) : null);
@@ -51,10 +53,18 @@ export default function AppRunnerPage() {
   const [app, setApp] = useState<AppFull | null>(null);
   const [error, setError] = useState('');
   const [tab, setTab] = useState(0);
+  const [needsCreds, setNeedsCreds] = useState(false);
+  const [credOpen, setCredOpen] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     api.getAppBySlug(slug).then(setApp).catch((e) => setError(api.errMessage(e)));
   }, [slug]);
+
+  useEffect(() => {
+    if (!app) return;
+    api.listAppCredentials(app.id).then((c) => setNeedsCreds(c.length > 0)).catch(() => setNeedsCreds(false));
+  }, [app]);
 
   if (error) {
     return (
@@ -80,20 +90,32 @@ export default function AppRunnerPage() {
             {initial}
           </Box>
           <Typography variant="subtitle1" fontWeight={700} sx={{ mr: 3 }}>{theme.brandName || app.name}</Typography>
-          <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" sx={{ minHeight: 48, '& .Mui-selected': { color: brand }, '& .MuiTabs-indicator': { backgroundColor: brand } }}>
+          <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" sx={{ minHeight: 48, flexGrow: 1, '& .Mui-selected': { color: brand }, '& .MuiTabs-indicator': { backgroundColor: brand } }}>
             {app.definition.pages.map((p) => (
               <Tab key={p.id} label={p.name} sx={{ minHeight: 48 }} />
             ))}
           </Tabs>
+          {needsCreds && (
+            <Button size="small" startIcon={<KeyIcon fontSize="small" />} onClick={() => setCredOpen(true)} sx={{ color: brand, flexShrink: 0 }}>
+              Connect accounts
+            </Button>
+          )}
         </Toolbar>
       </AppBar>
+      <Dialog open={credOpen} onClose={() => setCredOpen(false)} fullWidth maxWidth="sm">
+        <DialogTitle>Connect your accounts</DialogTitle>
+        <DialogContent>
+          <CredentialsManager appId={app.id} onChanged={() => setReloadKey((k) => k + 1)} />
+        </DialogContent>
+      </Dialog>
       <Box sx={{ flexGrow: 1, overflow: 'hidden' }}>
         {!page ? (
           <Box sx={{ display: 'grid', placeItems: 'center', height: '100%', color: 'text.secondary' }}>This app has no pages.</Box>
         ) : page.type === 'chat' ? (
-          <ChatView appId={app.id} pageId={page.id} greeting={page.chat?.greeting} persistHistory />
+          <ChatView key={`${page.id}-${reloadKey}`} appId={app.id} pageId={page.id} greeting={page.chat?.greeting} persistHistory />
         ) : (
           <UiPageRunner
+            key={`${page.id}-${reloadKey}`}
             appId={app.id}
             page={page}
             onNavigate={(slug) => {

@@ -47,13 +47,21 @@ export interface PlatformSettings {
   defaultVisibility: Visibility;
 }
 
+export type DataSourceAuthMode = 'shared' | 'per-user';
 export interface DataSource {
   id: string;
   name: string;
   type: DataSourceType;
   config: Record<string, unknown>;
+  authMode?: DataSourceAuthMode;
   createdAt: string;
   updatedAt: string;
+}
+export interface AppCredentialStatus {
+  dataSourceId: string;
+  name: string;
+  type: DataSourceType;
+  hasCredential: boolean;
 }
 export interface QueryDef {
   id: string;
@@ -253,10 +261,17 @@ export const api = {
 
   // data sources (per-app)
   listDataSources: (appId: string) => http.get<DataSource[]>(`/apps/${appId}/datasources`).then((r) => r.data),
-  createDataSource: (appId: string, body: { name: string; type: DataSourceType; config: Record<string, unknown> }) =>
+  createDataSource: (appId: string, body: { name: string; type: DataSourceType; config: Record<string, unknown>; authMode?: DataSourceAuthMode }) =>
     http.post<DataSource>(`/apps/${appId}/datasources`, body).then((r) => r.data),
-  updateDataSource: (appId: string, id: string, body: { name?: string; type?: DataSourceType; config?: Record<string, unknown> }) =>
+  updateDataSource: (appId: string, id: string, body: { name?: string; type?: DataSourceType; config?: Record<string, unknown>; authMode?: DataSourceAuthMode }) =>
     http.put<DataSource>(`/apps/${appId}/datasources/${id}`, body).then((r) => r.data),
+
+  // per-user credentials (each user supplies their own secret for a per-user data source)
+  listAppCredentials: (appId: string) => http.get<AppCredentialStatus[]>(`/apps/${appId}/credentials`).then((r) => r.data),
+  setCredential: (appId: string, dataSourceId: string, config: Record<string, unknown>) =>
+    http.put<{ dataSourceId: string; hasCredential: boolean }>(`/apps/${appId}/credentials/${dataSourceId}`, { config }).then((r) => r.data),
+  deleteCredential: (appId: string, dataSourceId: string) =>
+    http.delete(`/apps/${appId}/credentials/${dataSourceId}`).then((r) => r.data),
   deleteDataSource: (appId: string, id: string) => http.delete(`/apps/${appId}/datasources/${id}`).then((r) => r.data),
   testDataSource: (appId: string, id: string) =>
     http.post<{ ok: boolean; message: string }>(`/apps/${appId}/datasources/${id}/test`).then((r) => r.data),

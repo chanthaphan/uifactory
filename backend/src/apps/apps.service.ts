@@ -373,7 +373,7 @@ export class AppsService {
     if (!page) throw new NotFoundException('Page not found');
     const queryId = page.queryId || page.chat?.queryId;
     if (!queryId) return { data: null };
-    const result = await this.queries.run(queryId);
+    const result = await this.queries.run(queryId, undefined, user?.id);
     return { data: result.data, meta: result.meta };
   }
 
@@ -409,7 +409,7 @@ export class AppsService {
     if (def.allowWriteActions === false && !this.canEdit(app, user) && (await this.isMutationQuery(queryId))) {
       throw new ForbiddenException('You are not allowed to run write actions on this app');
     }
-    const result = await this.queries.run(queryId, body.params);
+    const result = await this.queries.run(queryId, body.params, user?.id);
     return { data: result.data, meta: result.meta };
   }
 
@@ -434,7 +434,7 @@ export class AppsService {
     const queryId = page?.chat?.queryId;
     if (queryId) {
       try {
-        contextData = (await this.queries.run(queryId)).data;
+        contextData = (await this.queries.run(queryId, undefined, user?.id)).data;
       } catch {
         contextData = undefined;
       }

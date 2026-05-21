@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import {
-  Alert, Box, Button, Chip, Divider, Drawer, IconButton, MenuItem, Stack, TextField, Typography,
+  Alert, Box, Button, Chip, Divider, Drawer, FormControlLabel, IconButton, MenuItem, Stack, Switch, TextField, Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import BoltIcon from '@mui/icons-material/Bolt';
-import { api, Connector, DataSource, DataSourceType, QueryDef } from '../api/client';
+import { api, Connector, DataSource, DataSourceAuthMode, DataSourceType, QueryDef } from '../api/client';
 import ResultView from './ResultView';
+import CredentialsManager from './CredentialsManager';
 
 const TYPE_LABEL: Record<DataSourceType, string> = { REST: 'REST API', POSTGRES: 'PostgreSQL', SQLITE: 'SQLite', MSGRAPH: 'Microsoft 365' };
 
@@ -34,6 +35,7 @@ export default function DataPanel({ appId, open, onClose, onChanged }: { appId: 
   const [dsName, setDsName] = useState('');
   const [dsType, setDsType] = useState<DataSourceType>('SQLITE');
   const [dsForm, setDsForm] = useState({ baseUrl: '', connectionString: '', file: '', headers: '' });
+  const [dsAuthMode, setDsAuthMode] = useState<DataSourceAuthMode>('shared');
 
   // query form
   const [qName, setQName] = useState('');
@@ -59,11 +61,12 @@ export default function DataPanel({ appId, open, onClose, onChanged }: { appId: 
   const addDataSource = async () => {
     setError('');
     try {
-      await api.createDataSource(appId, { name: dsName.trim(), type: dsType, config: dsConfigFromForm(dsType, dsForm) });
-      setDsName(''); setDsForm({ baseUrl: '', connectionString: '', file: '', headers: '' });
+      await api.createDataSource(appId, { name: dsName.trim(), type: dsType, config: dsConfigFromForm(dsType, dsForm), authMode: dsAuthMode });
+      setDsName(''); setDsForm({ baseUrl: '', connectionString: '', file: '', headers: '' }); setDsAuthMode('shared');
       load(); onChanged(); notify('Data source added');
     } catch (e) { setError(api.errMessage(e)); }
   };
+  const perUserCapable = dsType === 'REST' || dsType === 'POSTGRES';
   const addFromConnector = async () => {
     if (!connectorId) return;
     setError('');
@@ -123,6 +126,7 @@ export default function DataPanel({ appId, open, onClose, onChanged }: { appId: 
           {dataSources.map((d) => (
             <Stack key={d.id} direction="row" alignItems="center" spacing={1}>
               <Chip size="small" label={TYPE_LABEL[d.type]} />
+              {d.authMode === 'per-user' && <Chip size="small" color="warning" variant="outlined" label="per-user" />}
               <Typography variant="body2" sx={{ flexGrow: 1 }}>{d.name}</Typography>
               <IconButton size="small" title="Test" onClick={async () => { try { const r = await api.testDataSource(appId, d.id); notify(r.message); } catch (e) { setError(api.errMessage(e)); } }}><BoltIcon fontSize="small" /></IconButton>
               <IconButton size="small" onClick={() => removeDs(d.id)}><DeleteOutlineIcon fontSize="small" /></IconButton>
@@ -154,6 +158,12 @@ export default function DataPanel({ appId, open, onClose, onChanged }: { appId: 
           {dsType === 'POSTGRES' && <TextField size="small" label="Connection string" value={dsForm.connectionString} onChange={(e) => setDsForm({ ...dsForm, connectionString: e.target.value })} />}
           {dsType === 'REST' && <TextField size="small" label="Base URL" placeholder="https://api.example.com" value={dsForm.baseUrl} onChange={(e) => setDsForm({ ...dsForm, baseUrl: e.target.value })} />}
           {dsType === 'MSGRAPH' && <Typography variant="caption" color="text.secondary">Uses the platform's Azure AD app. No config needed.</Typography>}
+          {perUserCapable && (
+            <FormControlLabel
+              control={<Switch size="small" checked={dsAuthMode === 'per-user'} onChange={(e) => setDsAuthMode(e.target.checked ? 'per-user' : 'shared')} />}
+              label={<Typography variant="caption">Each user provides their own credentials{dsType === 'REST' ? ' (token/header)' : ' (connection string)'}</Typography>}
+            />
+          )}
           <Stack direction="row" spacing={1}>
             <Button size="small" onClick={testNew}>Test</Button>
             <Box flexGrow={1} />
@@ -201,6 +211,14 @@ export default function DataPanel({ appId, open, onClose, onChanged }: { appId: 
             <Button size="small" variant="contained" startIcon={<AddIcon />} disabled={!qName.trim() || !qDs} onClick={addQuery}>Save query</Button>
           </Box>
         </Stack>
+
+        {dataSources.some((d) => d.authMode === 'per-user') && (
+          <>
+            <Divider sx={{ my: 2 }} />
+            <Typography variant="subtitle2" gutterBottom>Your credentials</Typography>
+            <CredentialsManager appId={appId} />
+          </>
+        )}
       </Box>
     </Drawer>
   );

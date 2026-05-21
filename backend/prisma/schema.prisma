@@ -18,24 +18,42 @@ model User {
   avatarUrl   String?
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
-  apps          App[]           @relation("OwnerApps")
+  apps          App[]            @relation("OwnerApps")
   memberships   AppMembership[]
   conversations Conversation[]
+  credentials   UserCredential[]
 }
 
 /// A connection to an external data source, owned by a single app.
 model DataSource {
-  id        String   @id @default(cuid())
-  name      String
-  type      String // REST | POSTGRES | SQLITE | MSGRAPH
-  config    String // encrypted JSON
-  appId     String
-  app       App      @relation(fields: [appId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  queries   Query[]
+  id          String           @id @default(cuid())
+  name        String
+  type        String // REST | POSTGRES | SQLITE | MSGRAPH
+  config      String // encrypted JSON (shared/non-secret parts when authMode = per-user)
+  authMode    String           @default("shared") // shared | per-user
+  appId       String
+  app         App              @relation(fields: [appId], references: [id], onDelete: Cascade)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  queries     Query[]
+  credentials UserCredential[]
 
   @@index([appId])
+}
+
+/// A single user's own secret for a per-user data source (e.g. their DB login or API token).
+model UserCredential {
+  id           String     @id @default(cuid())
+  userId       String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dataSourceId String
+  dataSource   DataSource @relation(fields: [dataSourceId], references: [id], onDelete: Cascade)
+  config       String // encrypted JSON: the per-user secret fields, merged over the shared config
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@unique([userId, dataSourceId])
+  @@index([dataSourceId])
 }
 
 /// A saved query/request that runs against a DataSource, owned by a single app.

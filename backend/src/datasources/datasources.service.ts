@@ -10,7 +10,7 @@ import { redactConfig } from '../common/redact.util';
 import { LIMITS } from '../common/limits';
 import { BadRequestException } from '@nestjs/common';
 
-type DsRow = { id: string; name: string; type: string; config: string; appId: string; createdAt: Date; updatedAt: Date };
+type DsRow = { id: string; name: string; type: string; config: string; authMode: string; appId: string; createdAt: Date; updatedAt: Date };
 
 @Injectable()
 export class DataSourcesService {
@@ -30,10 +30,41 @@ export class DataSourcesService {
       name: ds.name,
       type: ds.type as DataSourceType,
       config: redactConfig(this.parseConfig(ds)),
+      authMode: ds.authMode,
       appId: ds.appId,
       createdAt: ds.createdAt,
       updatedAt: ds.updatedAt,
     };
+  }
+
+  /** Merge a per-user credential over the shared config (headers are deep-merged). */
+  private mergeConfig(base: Record<string, unknown>, over: Record<string, unknown>): Record<string, unknown> {
+    const merged = { ...base, ...over };
+    const baseHeaders = (base.headers as Record<string, string>) || undefined;
+    const overHeaders = (over.headers as Record<string, string>) || undefined;
+    if (baseHeaders || overHeaders) merged.headers = { ...(baseHeaders || {}), ...(overHeaders || {}) };
+    return merged;
+  }
+
+  /**
+   * Raw config for execution, resolving the *caller's* credential when the data source is per-user.
+   * Throws a clear error when a per-user credential is required but missing.
+   */
+  async getRawForUser(id: string, userId?: string) {
+    const row = await this.prisma.dataSource.findUnique({ where: { id } });
+    if (!row) throw new NotFoundException(`Data source ${id} not found`);
+    let parsedConfig = this.parseConfig(row);
+    if (row.authMode === 'per-user') {
+      if (!userId) {
+        throw new ForbiddenException('This data source uses per-user credentials. Sign in and connect your account to use it.');
+      }
+      const cred = await this.prisma.userCredential.findUnique({ where: { userId_dataSourceId: { userId, dataSourceId: id } } });
+      if (!cred) {
+        throw new ForbiddenException(`Connect your account for "${row.name}" to use this data.`);
+      }
+      parsedConfig = this.mergeConfig(parsedConfig, JSON.parse(decryptString(cred.config)) as Record<string, unknown>);
+    }
+    return { ...row, parsedConfig, type: row.type as DataSourceType };
   }
 
   async findAll(appId: string, user: AuthUser) {
@@ -67,7 +98,7 @@ export class DataSourcesService {
     await this.access.assertCanEdit(appId, user);
     await this.assertDataSourceCapacity(appId);
     const row = await this.prisma.dataSource.create({
-      data: { name: dto.name, type: dto.type, config: encryptString(JSON.stringify(dto.config)), appId },
+      data: { name: dto.name, type: dto.type, config: encryptString(JSON.stringify(dto.config)), authMode: dto.authMode || 'shared', appId },
     });
     return this.serialize(row);
   }
@@ -98,6 +129,7 @@ export class DataSourcesService {
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.type !== undefined) data.type = dto.type;
     if (dto.config !== undefined) data.config = encryptString(JSON.stringify(dto.config));
+    if (dto.authMode !== undefined) data.authMode = dto.authMode;
     const updated = await this.prisma.dataSource.update({ where: { id }, data });
     return this.serialize(updated);
   }
