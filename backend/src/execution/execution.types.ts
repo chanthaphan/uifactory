@@ -1,4 +1,4 @@
-export type DataSourceType = 'REST' | 'POSTGRES' | 'SQLITE';
+export type DataSourceType = 'REST' | 'POSTGRES' | 'SQLITE' | 'MSGRAPH';
 
 export interface RestConfig {
   baseUrl: string;
@@ -22,6 +22,13 @@ export interface RestQueryConfig {
 
 export interface SqlQueryConfig {
   sql: string;
+}
+
+/** Microsoft 365 / Graph: e.g. path "users?$top=10", "me/messages". Uses platform Azure app creds. */
+export interface MsGraphQueryConfig {
+  path: string;
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  body?: unknown;
 }
 
 export interface ExecutionResult {

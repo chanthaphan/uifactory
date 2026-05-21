@@ -67,9 +67,9 @@ export default function AppRunnerPage() {
   if (!app) return <Box sx={{ height: '100vh', display: 'grid', placeItems: 'center' }}><CircularProgress /></Box>;
 
   const page = app.definition.pages[tab];
-  const theme = (app.definition.theme || {}) as { brandColor?: string; brandName?: string };
+  const theme = (app.definition.theme || {}) as { brandColor?: string; brandName?: string; logo?: string };
   const brand = theme.brandColor || '#0b1f3a';
-  const initial = (theme.brandName || app.name || '?').trim().charAt(0).toUpperCase();
+  const initial = (theme.logo || theme.brandName || app.name || '?').trim().slice(0, 2) || '?';
 
   return (
     <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>

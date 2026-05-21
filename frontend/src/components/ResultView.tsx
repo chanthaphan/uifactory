@@ -12,7 +12,7 @@ function extractRows(data: unknown): Row[] | null {
     return data.every((d) => d && typeof d === 'object') ? (data as Row[]) : null;
   }
   if (data && typeof data === 'object') {
-    for (const key of ['data', 'results', 'items', 'rows', 'records']) {
+    for (const key of ['value', 'data', 'results', 'items', 'rows', 'records']) {
       const v = (data as Row)[key];
       if (Array.isArray(v) && v.every((d) => d && typeof d === 'object')) return v as Row[];
     }

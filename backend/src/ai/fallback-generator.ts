@@ -53,7 +53,7 @@ export function buildFallbackHtml(prompt: string, _sample: string, queryName?: s
   function findRows(d) {
     if (Array.isArray(d)) return d;
     if (d && typeof d === 'object') {
-      for (var k of ['data','results','items','rows','records']) {
+      for (var k of ['value','data','results','items','rows','records']) {
         if (Array.isArray(d[k])) return d[k];
       }
       for (var key in d) { if (Array.isArray(d[key])) return d[key]; }

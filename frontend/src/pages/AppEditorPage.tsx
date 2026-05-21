@@ -366,6 +366,23 @@ export default function AppEditorPage() {
               <ShareSettings visibility={sharing.visibility} members={sharing.members} ownerEmail={app.owner.email} onChange={(s) => { setSharing(s); setDirty(true); }} />
             </Box>
             <Box>
+              <Typography variant="subtitle2" gutterBottom>Branding</Typography>
+              {(() => {
+                const theme = (def.theme || {}) as { brandName?: string; brandColor?: string; logo?: string };
+                const setTheme = (patch: Record<string, unknown>) => { setDef({ ...def, theme: { ...theme, ...patch } }); setDirty(true); };
+                return (
+                  <Stack spacing={1.5}>
+                    <TextField size="small" label="Brand name" value={theme.brandName || ''} onChange={(e) => setTheme({ brandName: e.target.value })} placeholder={name} />
+                    <Stack direction="row" spacing={1.5} alignItems="center">
+                      <TextField size="small" label="Brand color" value={theme.brandColor || ''} onChange={(e) => setTheme({ brandColor: e.target.value })} placeholder="#0b1f3a" sx={{ flex: 1 }} />
+                      <Box component="input" type="color" value={theme.brandColor || '#0b1f3a'} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setTheme({ brandColor: e.target.value })} sx={{ width: 44, height: 40, border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 0, bgcolor: 'transparent' }} />
+                    </Stack>
+                    <TextField size="small" label="Logo (letter or emoji)" value={theme.logo || ''} onChange={(e) => setTheme({ logo: e.target.value })} placeholder="N" inputProps={{ maxLength: 2 }} />
+                  </Stack>
+                );
+              })()}
+            </Box>
+            <Box>
               <Typography variant="subtitle2" gutterBottom>AI / agent connection</Typography>
               <AiConnectionForm value={aiConfig} onChange={(c) => { setAiConfig(c); setDirty(true); }} />
             </Box>
