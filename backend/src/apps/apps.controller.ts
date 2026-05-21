@@ -91,7 +91,7 @@ export class AppsController {
   @Public()
   @Post(':id/chat')
   chat(@Param('id') id: string, @Body() dto: ChatDto, @CurrentUser() user?: AuthUser) {
-    return this.service.chat(id, dto.pageId, dto.messages, user, dto.conversationId);
+    return this.service.chat(id, dto.pageId, dto.messages, user, dto.conversationId, dto.persist);
   }
 
   /** Streaming chat: writes newline-delimited JSON ({ delta } chunks, then { done, source }). */
@@ -102,15 +102,16 @@ export class AppsController {
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('X-Accel-Buffering', 'no');
     try {
-      const source = await this.service.chatStream(
+      const { source, conversationId } = await this.service.chatStream(
         id,
         dto.pageId,
         dto.messages,
         (delta) => res.write(JSON.stringify({ delta }) + '\n'),
         user,
         dto.conversationId,
+        dto.persist,
       );
-      res.write(JSON.stringify({ done: true, source }) + '\n');
+      res.write(JSON.stringify({ done: true, source, conversationId }) + '\n');
     } catch (err) {
       res.write(JSON.stringify({ error: (err as Error).message || 'Chat failed' }) + '\n');
     } finally {

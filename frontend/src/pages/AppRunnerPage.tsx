@@ -91,7 +91,7 @@ export default function AppRunnerPage() {
         {!page ? (
           <Box sx={{ display: 'grid', placeItems: 'center', height: '100%', color: 'text.secondary' }}>This app has no pages.</Box>
         ) : page.type === 'chat' ? (
-          <ChatView appId={app.id} pageId={page.id} greeting={page.chat?.greeting} />
+          <ChatView appId={app.id} pageId={page.id} greeting={page.chat?.greeting} persistHistory />
         ) : (
           <UiPageRunner
             appId={app.id}

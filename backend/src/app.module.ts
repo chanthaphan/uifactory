@@ -12,6 +12,7 @@ import { QueriesModule } from './queries/queries.module';
 import { AiModule } from './ai/ai.module';
 import { AppsModule } from './apps/apps.module';
 import { ConnectorsModule } from './connectors/connectors.module';
+import { ConversationsModule } from './conversations/conversations.module';
 import { HealthController } from './health.controller';
 
 @Module({
@@ -29,6 +30,7 @@ import { HealthController } from './health.controller';
     AiModule,
     AppsModule,
     ConnectorsModule,
+    ConversationsModule,
   ],
   controllers: [HealthController],
 })

@@ -199,6 +199,19 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
 }
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  pageId?: string | null;
+  messageCount: number;
+  updatedAt: string;
+}
+export interface ConversationDetail {
+  id: string;
+  title: string;
+  pageId?: string | null;
+  messages: { role: 'user' | 'assistant'; content: string }[];
+}
 
 function errMessage(e: unknown): string {
   if (axios.isAxiosError(e)) {
@@ -297,15 +310,23 @@ export const api = {
     http.get<{ data: unknown; meta?: unknown }>(`/apps/${id}/pages/${pageId}/data`).then((r) => r.data),
   appRunQuery: (id: string, body: { queryId?: string; action?: string; pageId?: string; params?: Record<string, unknown> }) =>
     http.post<{ data: unknown; meta?: unknown }>(`/apps/${id}/run-query`, body).then((r) => r.data),
-  chat: (id: string, body: { pageId?: string; messages: ChatMessage[]; conversationId?: string }) =>
-    http.post<{ reply: string; source: string }>(`/apps/${id}/chat`, body).then((r) => r.data),
+  // chat history (per-user threads, signed-in only)
+  listConversations: (appId: string, pageId?: string) =>
+    http.get<ConversationSummary[]>(`/apps/${appId}/conversations`, { params: pageId ? { pageId } : {} }).then((r) => r.data),
+  getConversation: (appId: string, conversationId: string) =>
+    http.get<ConversationDetail>(`/apps/${appId}/conversations/${conversationId}`).then((r) => r.data),
+  deleteConversation: (appId: string, conversationId: string) =>
+    http.delete(`/apps/${appId}/conversations/${conversationId}`).then((r) => r.data),
 
-  /** Streaming chat: calls onDelta with each text chunk; resolves with the responder source. */
+  chat: (id: string, body: { pageId?: string; messages: ChatMessage[]; conversationId?: string; persist?: boolean }) =>
+    http.post<{ reply: string; source: string; conversationId?: string }>(`/apps/${id}/chat`, body).then((r) => r.data),
+
+  /** Streaming chat: calls onDelta with each text chunk; resolves with the responder source + thread id. */
   chatStream: async (
     id: string,
-    body: { pageId?: string; messages: ChatMessage[]; conversationId?: string },
+    body: { pageId?: string; messages: ChatMessage[]; conversationId?: string; persist?: boolean },
     onDelta: (text: string) => void,
-  ): Promise<{ source?: string }> => {
+  ): Promise<{ source?: string; conversationId?: string }> => {
     const res = await fetch(`/api/apps/${id}/chat/stream`, {
       method: 'POST',
       credentials: 'include',
@@ -321,6 +342,7 @@ export const api = {
     const decoder = new TextDecoder();
     let buffer = '';
     let source: string | undefined;
+    let conversationId: string | undefined;
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -330,12 +352,13 @@ export const api = {
         const line = buffer.slice(0, nl).trim();
         buffer = buffer.slice(nl + 1);
         if (!line) continue;
-        const obj = JSON.parse(line) as { delta?: string; done?: boolean; source?: string; error?: string };
+        const obj = JSON.parse(line) as { delta?: string; done?: boolean; source?: string; error?: string; conversationId?: string };
         if (obj.error) throw new Error(obj.error);
         if (obj.delta) onDelta(obj.delta);
         if (obj.source) source = obj.source;
+        if (obj.conversationId) conversationId = obj.conversationId;
       }
     }
-    return { source };
+    return { source, conversationId };
   },
 };

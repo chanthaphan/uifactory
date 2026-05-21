@@ -18,8 +18,9 @@ model User {
   avatarUrl   String?
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
-  apps        App[]           @relation("OwnerApps")
-  memberships AppMembership[]
+  apps          App[]           @relation("OwnerApps")
+  memberships   AppMembership[]
+  conversations Conversation[]
 }
 
 /// A connection to an external data source, owned by a single app.
@@ -73,6 +74,35 @@ model App {
   dataSources         DataSource[]
   queries             Query[]
   versions            AppVersion[]
+  conversations       Conversation[]
+}
+
+/// A persisted chat thread for a signed-in user on a specific chat page.
+model Conversation {
+  id        String    @id @default(cuid())
+  appId     String
+  app       App       @relation(fields: [appId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pageId    String? // chat page id within the app definition
+  title     String    @default("New chat")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  messages  Message[]
+
+  @@index([appId, userId, pageId])
+}
+
+/// A single message within a Conversation.
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String // user | assistant
+  content        String
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId])
 }
 
 /// An immutable snapshot of an app definition, captured on each publish — enables rollback.

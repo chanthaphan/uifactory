@@ -5,6 +5,7 @@ import { QueriesService } from '../queries/queries.service';
 import { AgentService, ChatMessage } from './agent.service';
 import { AiService, GenerateUiResult } from '../ai/ai.service';
 import { GenerateUiDto } from '../ai/dto/generate.dto';
+import { ConversationsService } from '../conversations/conversations.service';
 import { AuthUser } from '../auth/auth.types';
 import { CreateAppDto, SharingDto, UpdateAppDto } from './dto/app.dto';
 import {
@@ -31,6 +32,7 @@ export class AppsService {
     private readonly queries: QueriesService,
     private readonly agent: AgentService,
     private readonly ai: AiService,
+    private readonly conversations: ConversationsService,
   ) {}
 
   private include = { owner: true, memberships: true } as const;
@@ -409,14 +411,23 @@ export class AppsService {
     return { system, contextData };
   }
 
-  async chat(id: string, pageId: string | undefined, messages: ChatMessage[], user?: AuthUser, conversationId?: string) {
+  private lastUserMessage(messages: ChatMessage[]): string {
+    return [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+  }
+
+  async chat(id: string, pageId: string | undefined, messages: ChatMessage[], user?: AuthUser, conversationId?: string, persist?: boolean) {
     const app = await this.getOrThrow(id);
     this.assertRunnable(app, user);
     const { system, contextData } = await this.chatContext(app, pageId, user);
-    return this.agent.chat(this.aiConfigOf(app), system, messages, contextData, conversationId);
+    const doPersist = Boolean(persist && user);
+    let convId = conversationId;
+    if (doPersist) convId = await this.conversations.ensure(app.id, pageId, user!.id, conversationId, this.lastUserMessage(messages));
+    const result = await this.agent.chat(this.aiConfigOf(app), system, messages, contextData, convId ?? conversationId);
+    if (doPersist && convId) await this.conversations.appendTurn(convId, this.lastUserMessage(messages), result.reply);
+    return { ...result, conversationId: doPersist ? convId : undefined };
   }
 
-  /** Streaming chat: invokes onDelta with each text chunk. Returns the responder source. */
+  /** Streaming chat: invokes onDelta with each text chunk. Returns the responder source + thread id. */
   async chatStream(
     id: string,
     pageId: string | undefined,
@@ -424,11 +435,25 @@ export class AppsService {
     onDelta: (t: string) => void,
     user?: AuthUser,
     conversationId?: string,
+    persist?: boolean,
   ) {
     const app = await this.getOrThrow(id);
     this.assertRunnable(app, user);
     const { system, contextData } = await this.chatContext(app, pageId, user);
-    return this.agent.chatStream(this.aiConfigOf(app), system, messages, onDelta, contextData, conversationId);
+    const doPersist = Boolean(persist && user);
+    let convId = conversationId;
+    if (doPersist) convId = await this.conversations.ensure(app.id, pageId, user!.id, conversationId, this.lastUserMessage(messages));
+    let full = '';
+    const source = await this.agent.chatStream(
+      this.aiConfigOf(app),
+      system,
+      messages,
+      (d) => { full += d; onDelta(d); },
+      contextData,
+      convId ?? conversationId,
+    );
+    if (doPersist && convId) await this.conversations.appendTurn(convId, this.lastUserMessage(messages), full);
+    return { source, conversationId: doPersist ? convId : undefined };
   }
 
   /**
