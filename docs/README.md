@@ -10,6 +10,8 @@ version, deploy, and share them across the organization.
   bind data; add chat; manage versions; connect your own credentials; run & share apps.
 - **[Admin guide](admin-guide.md)** — manage users and roles, templates, prebuilt connectors, platform
   branding (name / logo / color), and AI defaults.
+- **[Codebase walkthrough](codebase-walkthrough.md)** — developer-oriented architecture guide covering
+  auth, apps, runtime query gating, iframe bridging, chat flow, and the main complexity hotspots.
 - **[API reference](api-reference.md)** — every HTTP route and the database model.
 - **[Configuration](configuration.md)** — all environment variables and tunable guardrails (limits).
 - **[Deployment](deployment.md)** — running locally, with Docker, and on Azure / AKS via Helm.

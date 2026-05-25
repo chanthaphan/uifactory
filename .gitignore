@@ -28,3 +28,7 @@ backend/data/
 .cache/
 coverage/
 *.tsbuildinfo
+
+.agents
+skills-lock.json
+.omo
