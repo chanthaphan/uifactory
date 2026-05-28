@@ -31,6 +31,7 @@ frontend/
 - All HTTP calls go through `src/api/client.ts`; keep `baseURL: '/api'` and `withCredentials: true`.
 - The axios interceptor logs out on non-auth 401s. Backend role failures must stay 403.
 - Use `AuthContext` for `isAdmin` and `canBuild`; do not duplicate platform role logic in pages.
+- Platform branding from `AuthContext` and `branding.ts` drives nav, login, browser title, and favicon.
 - Route pages are lazy-loaded from `App.tsx`; heavy chart/builder components are also lazy-loaded.
 - Prefer existing MUI `Stack`, `Box`, `Card`, `Grid`, `Alert`, `Chip`, and `sx` patterns over new styling systems.
 

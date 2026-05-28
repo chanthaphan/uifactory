@@ -32,11 +32,15 @@ backend/
 
 ## CONVENTIONS
 - Add backend HTTP features as Nest feature folders with controller/service/module files.
+- Platform roles are `admin`, `member`, and `viewer`; new SSO users default to `viewer`, and admins promote builders to `member`.
+- App authoring routes require `admin` or `member`; viewers can still run/view apps shared through public/org visibility.
 - Keep security-critical helpers decorator-free when practical; put reusable pure logic in `src/common/` and test it from `backend/test/`.
 - Prisma stores JSON blobs as strings. Parse/normalize at service boundaries.
+- Per-type Zod schemas in `src/datasources/config-validation.ts` validate datasource and connector create/update/test paths; keep those flows aligned.
 - Encrypt shared connector config, app AI config, and per-user credentials before persistence.
 - Return redacted configs to the UI; preserve blank/masked secrets during updates.
 - `@Public()` routes can still receive `CurrentUser()` because the global guard best-effort attaches the user first.
+- Backend unit tests target decorator-free utilities because the current Node/tsx test path must not execute Nest decorators or DI services.
 
 ## ANTI-PATTERNS
 - Never use 401 for role denial. Throw `ForbiddenException` for authenticated users without permission.
